@@ -112,6 +112,27 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    date: '2026-10-08',
+    title: 'Adjacency, one neuron per row',
+    summary:
+      'Adjacency now starts with one row and column per neuron, its Links table uses the same columns as Connectivity, and Reduce Matrix tables join onto skeletons with no setup.',
+    highlight: false,
+    items: [
+      {
+        kind: 'changed',
+        date: '2026-10-08',
+        title: '**Adjacency** no longer groups by type unless you ask it to.',
+        body: 'A new Adjacency node starts with **Group by type** off, so its matrix has one row and column per neuron. Tick it for one per cell type, as before. Saved workflows keep the setting they were saved with. **Links** now has Connectivity’s columns, `preId`, `preType`, `postId`, `postType` and `weight`, instead of `source` and `target`, with real neuron IDs in the ID columns. A card reading `source` or `target` from Links needs those pickers set again.',
+      },
+      {
+        kind: 'node',
+        date: '2026-10-08',
+        title: '**Reduce Matrix** writes a `neuronId` column.',
+        body: 'Where the matrix’s rows are neurons (Adjacency per neuron, NBLAST, syNBLAST, Distance, Neurons to ZapBench Traces, or a Similarity Matrix over `neuronId`), Reduce Matrix now writes each one’s ID as `neuronId`, so **Attach Attributes** joins the table onto skeletons without setting **Match table on**. Before, matching on `label` found nothing on neuPrint, where a neuron’s label reads like `T4a 12345`. Other rows, such as cell types or timesteps, have an empty `neuronId`; match those on `label` as before. Attach Attributes now warns when it attaches nothing.',
+      },
+    ],
+  },
+  {
     date: '2026-10-07',
     title: 'A neuron, drawn flat',
     summary:

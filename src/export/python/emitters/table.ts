@@ -32,10 +32,14 @@ import { readSelection } from '../../../nodes/lib/selectNeurons'
 import { volumeColumnName } from '../../../nodes/lib/pointsInMeshes'
 import { edgePlanRefusal, groupColumns, readPlan } from '../../../nodes/lib/synapseEdges'
 import { carryable } from '../../../nodes/lib/carryParams'
-import { ID_COLUMN_NAME } from '../../../core/ids'
+import { ID_COLUMN_NAME, ID_PATTERN } from '../../../core/ids'
 import { asFrame } from '../../neutral'
 import type { ReduceStat } from '../../../nodes/lib/matrixReduce'
-import { readReduceOptions, reduceColumnName } from '../../../nodes/lib/matrixReduce'
+import {
+  readReduceOptions,
+  reduceColumnName,
+  reducedAxisIsNeurons,
+} from '../../../nodes/lib/matrixReduce'
 import type { AggFn } from '../../../nodes/lib/tableOps'
 import type { ParamValues } from '../../../core/node'
 import type { CellValue } from '../../../core/values'
@@ -1240,6 +1244,13 @@ registerEmitter('core.reduceMatrix', (ctx) => {
    * and it looks exactly like a matrix of absences.
    */
   lines.push(`${out} = pd.DataFrame({${pyStr(LABEL_COLUMN_NAME)}: _m.index.astype('string')})`)
+  // `neuronId`: see `reducedAxisIsNeurons`.
+  const neurons = reducedAxisIsNeurons(ctx.inputType('in'), options.axis)
+  lines.push(
+    neurons
+      ? `${col(out, ID_COLUMN_NAME)} = ${col(out, LABEL_COLUMN_NAME)}.where(${col(out, LABEL_COLUMN_NAME)}.str.fullmatch(r'${ID_PATTERN}'))`
+      : `${col(out, ID_COLUMN_NAME)} = pd.Series(pd.NA, index=${out}.index, dtype=${pyStr(PY_DTYPE.str)})`,
+  )
   for (const stat of options.stats) {
     lines.push(
       `${col(out, reduceColumnName(stat, options.prefix))} = ${REDUCE_EXPRESSIONS[stat]('_m')}.to_numpy()`,

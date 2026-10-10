@@ -26,7 +26,7 @@ import { ID_COLUMN_NAME, idText, numericIds } from '../../core/ids'
 import type {
   CellValue,
   GeometryUnits,
-  MatrixValue,
+  AdjacencyMatrix,
   MeshesValue,
   MeshGeometry,
   PointsValue,
@@ -35,14 +35,7 @@ import type {
   SkeletonsValue,
   TableValue,
 } from '../../core/values'
-import {
-  boundsOf,
-  cableLength,
-  makeMatrix,
-  makeTable,
-  selectRows,
-  tableFromRows,
-} from '../../core/values'
+import { boundsOf, cableLength, makeTable, selectRows, tableFromRows } from '../../core/values'
 import { geometryFrame } from '../transforms/spaces'
 import { mapWithConcurrency } from '../concurrency'
 import {
@@ -70,6 +63,8 @@ import type {
   SynapseRequest,
   SynapsesBetweenRequest,
 } from '../source'
+import type { Edge } from '../connectivity'
+import { matrixFromEdges } from '../connectivity'
 import {
   ROI_MESH_SCHEMA,
   SYNAPSES_BETWEEN_SCHEMA,
@@ -591,7 +586,7 @@ export class CatmaidSource implements DataSource {
     return tableFromRows(this.schemas.connectivity, rows)
   }
 
-  async fetchAdjacency(req: AdjacencyRequest): Promise<MatrixValue> {
+  async fetchAdjacency(req: AdjacencyRequest): Promise<AdjacencyMatrix> {
     const projectId = this.projectId(req.datasetId)
     const options = req.signal ? { signal: req.signal } : {}
     const rows = numericIds(req.sourceIds)
@@ -599,17 +594,20 @@ export class CatmaidSource implements DataSource {
     const matrix = await connectivityMatrix(this.server, projectId, rows, columns, options)
     const labels = await this.labelIndex(req.datasetId, options)
 
-    const label = (id: number): string =>
-      req.groupByType ? (labels.labels.get(id)?.type ?? String(id)) : String(id)
-
-    const values = new Float64Array(rows.length * columns.length)
-    rows.forEach((source, r) => {
-      const line = matrix[String(source)] ?? {}
-      columns.forEach((target, c) => {
-        values[r * columns.length + c] = line[String(target)] ?? 0
-      })
-    })
-    return makeMatrix(rows.map(label), columns.map(label), values, 'synapses', 'count')
+    // The shared fold, so grouping by type sums a type's neurons as every other source does —
+    // this one wrote a row per neuron under its type's name once, which repeated the label.
+    const edges: Edge[] = []
+    for (const [pre, targets] of Object.entries(matrix)) {
+      for (const [post, weight] of Object.entries(targets ?? {})) {
+        if (weight) edges.push({ pre, post, weight })
+      }
+    }
+    const types = new Map<string, string>()
+    for (const id of [...rows, ...columns]) {
+      const type = labels.labels.get(id)?.type
+      if (type) types.set(String(id), type)
+    }
+    return matrixFromEdges(edges, rows.map(String), columns.map(String), types, req.groupByType)
   }
 
   // -------------------------------------------------------------------------

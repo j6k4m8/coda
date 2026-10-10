@@ -146,6 +146,20 @@ describe('reading traces for a neuron table', () => {
     expect(traces.colLabels).toHaveLength(654)
   })
 
+  it('records each row’s neuron beside its label, and no neuron for a timestep', async () => {
+    // What Reduce Matrix writes as `neuronId`: the dataset's id, never the ZapBench number, and
+    // never a timestep's `2423`, which would pass as one.
+    const { traces } = await run(
+      neurons([
+        ['100', 'LC4', 10],
+        ['200', 'LC6', 3],
+      ]),
+      { condition: 'flash', labelColumn: 'type' },
+    )
+    expect(traces.lines?.rows.map((line) => line.id)).toEqual(['100', '200'])
+    expect(new Set(traces.lines?.cols.map((line) => line.id))).toEqual(new Set([null]))
+  })
+
   it('keeps the input’s row order and labels rows by the Label by column', async () => {
     const { traces } = await run(
       neurons([

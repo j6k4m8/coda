@@ -27,7 +27,7 @@
  * annotation chain reaches these columns exactly as it reaches every other surface.
  */
 
-import type { DatasetEdges, MatrixValue, TableValue } from '../core/values'
+import type { AdjacencyMatrix, DatasetEdges, TableValue } from '../core/values'
 import { tableFromRows } from '../core/values'
 import type { NeuronId } from '../core/ids'
 import type { Edge } from './connectivity'
@@ -247,17 +247,18 @@ function requireEdgeProperties(
 export async function adjacencyFor(
   source: DataSource,
   req: AdjacencyRequest,
-): Promise<MatrixValue> {
+): Promise<AdjacencyMatrix> {
   // `connectivityFor`'s gate, for its reason: a source that cannot answer ignores the field, and
   // would fill a matrix labelled `weightAxonDendrite` with whole-connection weights.
   if (edgePropertyWeight(req.weight)) requireEdgeProperties(source, req)
   if (!req.edges) return source.fetchAdjacency(req)
   const [set, types] = await Promise.all([
     requireEdgeSet(req.edges, req.signal, req.onWarn),
-    req.groupByType ? typeLookup(source, req.datasetId, req) : undefined,
+    // Only to group, as `CaveSource.fetchAdjacency` asks: per neuron it is a cold index fetch.
+    req.groupByType ? typeLookup(source, req.datasetId, req) : new Map<string, string>(),
   ])
   const edges = edgesBetween(set, req.sourceIds, req.targetIds)
-  return matrixFromEdges(edges, req.sourceIds, req.targetIds, types)
+  return matrixFromEdges(edges, req.sourceIds, req.targetIds, types, req.groupByType)
 }
 
 export async function pathStepFor(

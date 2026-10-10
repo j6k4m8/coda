@@ -20,6 +20,7 @@ core.reduceMatrix: axis, stats, prefix, excludeDiagonal
 ## What comes out
 
 - `label`: the matrix's row (or column) labels.
+- `neuronId`: the neuron each row stands for, so [Attach Attributes](#neuron.attachAttributes) can join the table onto skeletons without any setup. It is empty for a row that is not a neuron, such as a cell type from an Adjacency grouped by type, or a timestep.
 - One column per ticked statistic, in the order you ticked them. With `Prefix` set to e.g. `zap`, `mean` becomes `zap_mean`. That is useful if you later join two of these tables.
 
 If you tick no statistics at all, you get just the labels.

@@ -736,6 +736,40 @@ describe('synapses between', () => {
   })
 })
 
+describe('adjacency', () => {
+  const routes = (url: string) =>
+    url.split('?')[0]!.endsWith('/skeleton/connectivity_matrix')
+      ? { 16: { 430: 3, 6582: 2 }, 430: { 6582: 4 } }
+      : defaultRoutes(url)
+  const ask = async (groupByType: boolean) => {
+    stubFetch(routes)
+    return source().fetchAdjacency({
+      datasetId: '1',
+      sourceIds: ['16', '430'],
+      targetIds: ['430', '6582'],
+      groupByType,
+    })
+  }
+
+  it('names each line by its skeleton id, per neuron', async () => {
+    const m = await ask(false)
+    expect(m.lines.rows.map((l) => l.id)).toEqual(['16', '430'])
+    expect(m.lines.cols.map((l) => l.id)).toEqual(['430', '6582'])
+    expect([...m.values]).toEqual([3, 2, 0, 4])
+  })
+
+  it('sums a type’s neurons into one line when grouped, rather than repeating its name', async () => {
+    // It wrote one row per neuron under its type's name once: the label repeated, nothing summed.
+    const m = await ask(true)
+    expect(new Set(m.rowLabels).size).toBe(m.rowLabels.length)
+    expect(new Set(m.colLabels).size).toBe(m.colLabels.length)
+    for (const line of [...m.lines.rows, ...m.lines.cols]) {
+      expect(line.id === null).toBe(line.type !== null)
+    }
+    expect([...m.values].reduce((a, b) => a + b, 0)).toBe(9)
+  })
+})
+
 describe('volumes as region meshes', () => {
   it('reads the column table rather than assuming records', async () => {
     stubFetch(defaultRoutes)

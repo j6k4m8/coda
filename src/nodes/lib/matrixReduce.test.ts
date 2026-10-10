@@ -13,7 +13,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { SILENT } from '../../core/limits'
-import { columnNames } from '../../core/types'
+import { T, columnNames } from '../../core/types'
 import { makeMatrix } from '../../core/values'
 import type { MatrixValue } from '../../core/values'
 import type { ReduceOptions, ReduceStat } from './matrixReduce'
@@ -23,6 +23,7 @@ import {
   reduceColumnName,
   reduceMatrixSchema,
   reduceMatrixTable,
+  reducedAxisIsNeurons,
 } from './matrixReduce'
 
 const ALL_STATS: ReduceStat[] = REDUCE_STAT_OPTIONS.map((option) => option.value)
@@ -281,8 +282,49 @@ describe('the schema half', () => {
   it('hands back the labels alone when nothing is ticked', () => {
     // A legitimate state rather than a half-built card: a matrix's own line names, as a table.
     const table = reduceMatrixTable(m, options({ stats: [] }), SILENT)
-    expect(columnNames(table.schema)).toEqual(['label'])
+    expect(columnNames(table.schema)).toEqual(['label', 'neuronId'])
     expect(table.data.label).toEqual(['a', 'b'])
+  })
+})
+
+describe('the neuronId column', () => {
+  it('is the id a matrix records for each line, never its display label', () => {
+    // An adjacency on neuPrint: `type id` labels, the ids recorded beside them, and a type line.
+    const adjacency = {
+      ...makeMatrix(['T4a 12345', 'LPLC2'], ['x'], Float64Array.from([1, 2])),
+      lines: {
+        rows: [
+          { id: '12345', type: 'T4a' },
+          { id: null, type: 'LPLC2' },
+        ],
+        cols: [{ id: null, type: 'x' }],
+      },
+    }
+    const table = reduceMatrixTable(adjacency, options({ stats: [] }), SILENT)
+    expect(table.data.neuronId).toEqual(['12345', null])
+  })
+
+  it('is null wherever nothing is recorded, a label that looks like an id included', () => {
+    // A timestep or hop axis labels its lines `0`, `1`, `2`: well-formed ids, and no neurons.
+    const plain = makeMatrix(['0', '1'], ['t0'], Float64Array.from([1, 2]))
+    const table = reduceMatrixTable(plain, options({ stats: [] }), SILENT)
+    expect(table.data.neuronId).toEqual([null, null])
+  })
+
+  it('reads which axes are neurons off the type, for the exporters', () => {
+    const neurons = T.matrix({ rows: true, cols: false })
+    expect(reducedAxisIsNeurons(neurons, 'rows')).toBe(true)
+    expect(reducedAxisIsNeurons(neurons, 'columns')).toBe(false)
+    expect(reducedAxisIsNeurons(T.matrix(), 'rows')).toBe(false)
+  })
+
+  it('follows the axis it reduces', () => {
+    const transposed = {
+      ...makeMatrix(['x'], ['T4a 12345'], Float64Array.from([1])),
+      lines: { rows: [{ id: null, type: 'x' }], cols: [{ id: '12345', type: 'T4a' }] },
+    }
+    const table = reduceMatrixTable(transposed, options({ axis: 'columns', stats: [] }), SILENT)
+    expect(table.data.neuronId).toEqual(['12345'])
   })
 })
 

@@ -101,7 +101,7 @@ const PLURAL: Record<CarryNoun, string> = { skeleton: 'skeletons', mesh: 'meshes
  * The **left** key is always the geometry's `neuronId`, which every collection is required to
  * carry (`SkeletonsValue.attributes`: "Must contain `neuronId`"). The right key is an argument
  * because `neuron.attachAttributes` matches an arbitrary table, whose key is whatever that table
- * calls it — `label` on a Reduce Matrix or a Cut Tree, `neuronId` for the `Carry fields` param
+ * calls it — `label` on a Cut Tree or an Embedding (Reduce Matrix writes `neuronId`), `neuronId` for the `Carry fields` param
  * that was this module's only caller.
  */
 function carryJoin(rightKey: string) {

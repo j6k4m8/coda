@@ -47,6 +47,15 @@ export interface TableSchema {
   columns: ColumnSchema[]
 }
 
+/** Which axes of a matrix are neurons, line for line. */
+export interface MatrixNeurons {
+  readonly rows: boolean
+  readonly cols: boolean
+}
+
+/** Both axes neurons, line for line. */
+export const NEURONS_BOTH_AXES: MatrixNeurons = { rows: true, cols: true }
+
 export type CodaType =
   /** Wildcard. Only used by reroute/debug nodes — real nodes should name a type. */
   | { kind: 'any' }
@@ -90,8 +99,13 @@ export type CodaType =
   | { kind: 'table'; schema?: TableSchema }
   /** A table guaranteed to have a `neuronId` column. Subtype of `table`. */
   | { kind: 'neurons'; schema?: TableSchema }
-  /** Labelled 2D numeric array — adjacency, correlation, pivot output. */
-  | { kind: 'matrix' }
+  /**
+   * Labelled 2D numeric array — adjacency, correlation, pivot output. `neurons` says which axes'
+   * lines are neurons, declared by the builders that record `MatrixValue.lines` (its doc names
+   * them): what an exporter reads to write a `neuronId` the canvas reads off those lines. A builder
+   * no exporter takes (ZapBench traces) records lines and declares nothing, there being no reader.
+   */
+  | { kind: 'matrix'; neurons?: MatrixNeurons }
   /**
    * A node-link graph: node and edge attribute tables plus topology. Distinct from
    * `matrix` because it keeps per-node and per-edge attributes, which is what visual
@@ -191,7 +205,8 @@ export const T = {
     schema ? { kind: 'table', schema } : { kind: 'table' },
   neurons: (schema?: TableSchema): CodaType =>
     schema ? { kind: 'neurons', schema } : { kind: 'neurons' },
-  matrix: (): CodaType => ({ kind: 'matrix' }),
+  matrix: (neurons?: MatrixNeurons): CodaType =>
+    neurons ? { kind: 'matrix', neurons } : { kind: 'matrix' },
   network: (nodeSchema?: TableSchema, edgeSchema?: TableSchema): CodaType => ({
     kind: 'network',
     ...(nodeSchema ? { nodeSchema } : {}),

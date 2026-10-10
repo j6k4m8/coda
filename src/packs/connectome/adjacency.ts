@@ -2,7 +2,7 @@ import { packNode } from '../../core/registry'
 import { connectivityRequest } from '../../nodes/lib/datasetParam'
 import { adjacencyFor } from '../../data/queries'
 import { WEIGHT_PROPERTY } from '../../data/source'
-import { T } from '../../core/types'
+import { NEURONS_BOTH_AXES, T } from '../../core/types'
 import { isTableValue } from '../../core/values'
 import {
   edgePropertyIssues,
@@ -10,7 +10,9 @@ import {
   requireDataset,
   weightPropertyOptions,
 } from '../../nodes/lib/datasetParam'
-import { idColumn, matrixLinksSchema, matrixToLinks } from '../../nodes/lib/tableOps'
+import { idColumn } from '../../nodes/lib/tableOps'
+import { MATRIX_LINKS_SCHEMA, matrixToLinks } from '../../nodes/lib/connectivityOps'
+import { typesOf } from '../../data/connectivity'
 
 /**
  * Connection matrix between two neuron sets.
@@ -24,11 +26,12 @@ import { idColumn, matrixLinksSchema, matrixToLinks } from '../../nodes/lib/tabl
  * filter, join, export — and, the reason it was added, reach `Build Network` at all. Before it
  * existed a connection matrix could be drawn by the Heatmap and nothing else: no node in the
  * registry turned one back into an edge list, so a matrix was a dead end for everything that
- * thinks in links. Its columns are named for `net.build`'s pickers, which makes the two
- * dropdowns obvious rather than unnecessary — see `matrixLinksSchema` on why not unnecessary.
+ * thinks in links. Its columns are Connectivity's (`MATRIX_LINKS_SCHEMA`), with real ids in the id
+ * columns rather than the matrix's display labels, so an id-reading node downstream — Connection
+ * Compartments above all — takes either edge list with the same pickers.
  *
  * `Links` is derived *from the matrix* rather than fetched again, so the two cannot disagree
- * about labels, grouping or weights — the same rule ROI Connectivity follows in the opposite
+ * about lines, grouping or weights — the same rule ROI Connectivity follows in the opposite
  * direction. It carries only the non-zero cells; `matrixToLinks` argues that at length, and the
  * short version is that the zeros were manufactured by the reshape rather than measured.
  *
@@ -39,13 +42,13 @@ export const adjacencyNode = packNode({
   label: 'Adjacency',
   category: 'query',
   description:
-    'Synapse counts from one set of neurons onto another, as a matrix and as a table of ' +
-    'links with `source`, `target` and `weight`.',
+    'Synapse counts from one set of neurons onto another, as a matrix and as an edge list ' +
+    'with Connectivity’s columns: `preId`, `preType`, `postId`, `postType` and `weight`.',
   guide:
     'Counts synapses from the Sources onto the Targets, per cell type or per neuron. The ' +
     'matrix goes into a Heatmap (via Normalize if one type dominates). Links has one row ' +
-    'per non-zero cell with source, target and weight columns, ready for Build Network once ' +
-    'its Target and Weight pickers are set to them.',
+    'per non-zero cell in the same columns as Connectivity’s edge list, so it feeds the ' +
+    'same nodes; grouped by type, the id columns are empty and the types name each end.',
   cost: 'expensive',
   inputs: [
     { id: 'dataset', label: 'Dataset', type: T.dataset() },
@@ -54,7 +57,7 @@ export const adjacencyNode = packNode({
   ],
   outputs: [
     { id: 'matrix', label: 'Matrix', type: T.matrix() },
-    { id: 'links', label: 'Links', type: T.table(matrixLinksSchema()) },
+    { id: 'links', label: 'Links', type: T.table(MATRIX_LINKS_SCHEMA) },
   ],
   params: [
     {
@@ -62,7 +65,12 @@ export const adjacencyNode = packNode({
       kind: 'boolean',
       label: 'Group by type',
       help: 'On: one row/column per neuron type, weights summed. Off: one per neuron id.',
-      default: true,
+      /*
+       * Off since Links carried real ids: per neuron is the form every id-reading node downstream
+       * takes with no picking. It was on, so a stored node without the key meant grouped.
+       */
+      default: false,
+      absentMeans: true,
     },
     /*
      * What fills a cell. One property rather than several, because a matrix holds one number per
@@ -86,9 +94,13 @@ export const adjacencyNode = packNode({
   ],
 
   // Both exact before anything runs: a matrix carries no schema, and the link table's shape is
-  // decided by "a matrix has two axes and a value" rather than by the data — so a picker
+  // decided by "each end's id and type, and a value" rather than by the data — so a picker
   // downstream of `Links` fills the moment the wire is drawn.
-  inferOutputs: () => ({ matrix: T.matrix(), links: T.table(matrixLinksSchema()) }),
+  inferOutputs: (ctx) => ({
+    // Per neuron both axes are neurons; grouped by type they are types.
+    matrix: T.matrix(ctx.params.groupByType === true ? undefined : NEURONS_BOTH_AXES),
+    links: T.table(MATRIX_LINKS_SCHEMA),
+  }),
 
   validate: (ctx) =>
     edgePropertyIssues(ctx.inputs.dataset, [readWeightProperty(ctx.params.weight)]),
@@ -112,7 +124,7 @@ export const adjacencyNode = packNode({
       ...connectivityRequest(dataset),
       sourceIds,
       targetIds,
-      groupByType: ctx.params.groupByType !== false,
+      groupByType: ctx.params.groupByType === true,
       // Only when it is not the default, so the request every graph before this control made is
       // the request it still makes.
       ...(weight ? { weight } : {}),
@@ -120,6 +132,8 @@ export const adjacencyNode = packNode({
       onWarn: ctx.warn,
     })
 
-    return { matrix, links: matrixToLinks(matrix) }
+    // A line the source left untyped takes the wired tables' type: memoised, so free.
+    const typeOf = (id: string) => typesOf(sources).get(id) ?? typesOf(targets).get(id)
+    return { matrix, links: matrixToLinks(matrix, typeOf) }
   },
 })

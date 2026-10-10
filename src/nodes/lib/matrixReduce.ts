@@ -53,7 +53,7 @@
 import type { Warner } from '../../core/limits'
 import type { ParamValues } from '../../core/node'
 import { quantileSorted } from '../../core/stats'
-import type { ColumnSchema, TableSchema } from '../../core/types'
+import type { CodaType, ColumnSchema, TableSchema } from '../../core/types'
 import { column } from '../../core/types'
 import type { ColumnData, MatrixValue, TableValue } from '../../core/values'
 import { makeTable } from '../../core/values'
@@ -61,6 +61,7 @@ import { isSquarePopulation } from './linkageOps'
 import type { MatrixAxis } from './matrixShape'
 import { labelsOf } from './matrixShape'
 import { LABEL_COLUMN_NAME } from './tableOps'
+import { ID_COLUMN_NAME } from '../../core/ids'
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -164,7 +165,10 @@ export function reduceColumnName(stat: ReduceStat, prefix: string): string {
  * `tableOps.ts`.
  */
 export function reduceMatrixSchema(options: ReduceOptions): TableSchema {
-  const columns: ColumnSchema[] = [column(LABEL_COLUMN_NAME, 'str')]
+  const columns: ColumnSchema[] = [
+    column(LABEL_COLUMN_NAME, 'str'),
+    column(ID_COLUMN_NAME, 'str'),
+  ]
   for (const stat of options.stats) {
     // `n` is a count; everything else is a measurement over floats.
     columns.push(column(reduceColumnName(stat, options.prefix), stat === 'n' ? 'i64' : 'f64'))
@@ -195,6 +199,8 @@ interface LineStats {
 /** Everything one set of numbers-affecting options produces, under the statistic's bare name. */
 interface Reduction {
   labels: ColumnData
+  /** Each line's neuron, or null: `lineIds`. */
+  ids: ColumnData
   columns: Partial<Record<ReduceStat, ColumnData>>
   warnings: string[]
 }
@@ -256,7 +262,10 @@ export function reduceMatrixTable(
   const { reduction } = held
   for (const message of reduction.warnings) ctx.warn(message)
 
-  const data: Record<string, ColumnData> = { [LABEL_COLUMN_NAME]: reduction.labels }
+  const data: Record<string, ColumnData> = {
+    [LABEL_COLUMN_NAME]: reduction.labels,
+    [ID_COLUMN_NAME]: reduction.ids,
+  }
   for (const stat of options.stats) {
     /*
      * The key pins which statistics the entry holds — the six single-pass ones always, and
@@ -335,7 +344,32 @@ function reduce(matrix: MatrixValue, options: ReduceOptions): Reduction {
     }
   }
 
-  return { labels: labelsOf(matrix, options.axis).slice(), columns, warnings }
+  return {
+    labels: labelsOf(matrix, options.axis).slice(),
+    ids: lineIds(matrix, options.axis),
+    columns,
+    warnings,
+  }
+}
+
+/** The `rows`/`cols` key an axis goes by on `MatrixValue.lines` and on the type's `neurons`. */
+const axisKey = (axis: MatrixAxis) => (axis === 'rows' ? 'rows' : 'cols')
+
+/**
+ * Which neuron each surviving line is, for the `neuronId` column — so Attach Attributes joins a
+ * reduction onto geometry with no picking, and on the id rather than a display label.
+ *
+ * **Only what the matrix records** (`MatrixValue.lines`, whose doc names who records them). Never
+ * read off a label, not even one that looks like an id: a matrix's labels are whatever the node
+ * above put there, and `0`, `1`, `2` on a timestep or hop axis would pass as neuron ids. A
+ * `neuronId` column is a claim every id-reading node acts on (invariant 8), so a line nobody
+ * recorded is null.
+ */
+function lineIds(matrix: MatrixValue, axis: MatrixAxis): ColumnData {
+  const lines = matrix.lines?.[axisKey(axis)]
+  return lines
+    ? lines.map((line) => line.id)
+    : new Array<null>(labelsOf(matrix, axis).length).fill(null)
 }
 
 /**
@@ -419,4 +453,15 @@ function valueOf(stats: LineStats, stat: ReduceStat): number | null {
     case 'max':
       return stats.n > 0 ? stats.max : null
   }
+}
+
+/**
+ * Whether the axis a reduction keeps is one of neurons, by the matrix's inferred type — what the
+ * exporters ask, the canvas reading the recorded lines instead. On such an axis an exporter writes
+ * the label as `neuronId` where the label is an id (`ID_PATTERN`): every such matrix there is
+ * indexed by neuron id. Approximate after a `Label by` on syNBLAST, whose exported frame is indexed
+ * by the label — a type there reads null in the notebook where the canvas has the id.
+ */
+export function reducedAxisIsNeurons(type: CodaType | undefined, axis: MatrixAxis): boolean {
+  return type?.kind === 'matrix' && type.neurons !== undefined && type.neurons[axisKey(axis)]
 }

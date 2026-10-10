@@ -16,10 +16,10 @@ import { DatasetListing } from '../datasetListing'
 import { PeekGate } from '../peekGate'
 import type { TableSchema } from '../../core/types'
 import type {
+  AdjacencyMatrix,
   ColumnData,
   CellValue,
   GeometryUnits,
-  MatrixValue,
   MeshesValue,
   PointsValue,
   SkeletonGeometry,
@@ -32,7 +32,6 @@ import {
   boundsOf,
   cableLength,
   emptyTable,
-  makeMatrix,
   makeTable,
   tableFromRows,
 } from '../../core/values'
@@ -62,6 +61,7 @@ import type {
   SynapseTotalsRequest,
   ViewerSceneRequest,
 } from '../source'
+import { matrixFromEdges } from '../connectivity'
 import { SYNAPSE_UNITS } from '../synapseUnits'
 import {
   CANONICAL_SCHEMAS,
@@ -918,9 +918,9 @@ export class NeuPrintSource implements DataSource {
     return tableFromCypher(response, PATH_STEP_SCHEMA)
   }
 
-  async fetchAdjacency(req: AdjacencyRequest): Promise<MatrixValue> {
+  async fetchAdjacency(req: AdjacencyRequest): Promise<AdjacencyMatrix> {
     if (req.sourceIds.length === 0 || req.targetIds.length === 0) {
-      return makeMatrix([], [], new Float64Array(0), 'synapses')
+      return matrixFromEdges([], [], [], new Map(), false)
     }
     const response = await runCypher(
       adjacencyCypher(req),
@@ -1853,56 +1853,26 @@ function emptyDiscovered(): DiscoveredSchema {
  * to return, so an adjacency matrix lines up with the neuron table it came from and a
  * missing pair reads as a zero rather than shifting the grid.
  */
-function matrixFromConnections(response: CypherResponse, req: AdjacencyRequest): MatrixValue {
-  /*
-   * Both endpoint ids are stringified once, here, and indexed by row below.
-   *
-   * The label pass and the matrix pass each need the same two keys, and every id neuPrint
-   * sends is a JSON number — so doing it per pass is two to four `String()` allocations per
-   * row where two will do. On a 2000x2000 adjacency that is a few hundred thousand transient
-   * strings. Two pointer arrays are both cheaper and smaller than the duplicates they replace.
-   */
-  const rows = response.data
-  const srcKeys = new Array<string>(rows.length)
-  const dstKeys = new Array<string>(rows.length)
+function matrixFromConnections(
+  response: CypherResponse,
+  req: AdjacencyRequest,
+): AdjacencyMatrix {
+  // Each id stringified once, read by both the type map and the edge.
   const label = new Map<string, string>()
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]!
-    const src = (srcKeys[i] = idKey(row[0]))
-    const dst = (dstKeys[i] = idKey(row[2]))
-    if (typeof row[1] === 'string') label.set(src, row[1])
-    if (typeof row[3] === 'string') label.set(dst, row[3])
-  }
-
-  if (req.groupByType) {
-    const key = (id: string) => label.get(id) ?? id
-    const rowKeys = [...new Set(req.sourceIds.map(key))]
-    const colKeys = [...new Set(req.targetIds.map(key))]
-    const rowIndex = new Map(rowKeys.map((k, i) => [k, i]))
-    const colIndex = new Map(colKeys.map((k, i) => [k, i]))
-    const values = new Float64Array(rowKeys.length * colKeys.length)
-    for (let i = 0; i < rows.length; i++) {
-      const r = rowIndex.get(key(srcKeys[i]!))
-      const c = colIndex.get(key(dstKeys[i]!))
-      if (r === undefined || c === undefined) continue
-      values[r * colKeys.length + c] =
-        (values[r * colKeys.length + c] ?? 0) + Number(rows[i]![4] ?? 0)
-    }
-    return makeMatrix(rowKeys, colKeys, values, 'synapses')
-  }
-
-  const rowIndex = new Map(req.sourceIds.map((id, i) => [id, i]))
-  const colIndex = new Map(req.targetIds.map((id, i) => [id, i]))
-  const values = new Float64Array(req.sourceIds.length * req.targetIds.length)
-  for (let i = 0; i < rows.length; i++) {
-    const r = rowIndex.get(srcKeys[i]!)
-    const c = colIndex.get(dstKeys[i]!)
-    if (r === undefined || c === undefined) continue
-    values[r * req.targetIds.length + c] = Number(rows[i]![4] ?? 0)
-  }
-  const name = (id: string) => {
-    const type = label.get(id)
-    return type ? `${type} ${id}` : id
-  }
-  return makeMatrix(req.sourceIds.map(name), req.targetIds.map(name), values, 'synapses')
+  const edges = response.data.map((row) => {
+    const pre = idKey(row[0])
+    const post = idKey(row[2])
+    if (typeof row[1] === 'string') label.set(pre, row[1])
+    if (typeof row[3] === 'string') label.set(post, row[3])
+    return { pre, post, weight: Number(row[4] ?? 0) }
+  })
+  // The shared fold in both modes; neuPrint's own display label, `type id`, per neuron.
+  return matrixFromEdges(
+    edges,
+    req.sourceIds,
+    req.targetIds,
+    label,
+    req.groupByType,
+    (key, line) => (line.id !== null && line.type ? `${line.type} ${line.id}` : key),
+  )
 }

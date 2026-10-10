@@ -334,7 +334,7 @@ const EXAMPLES: readonly ExampleSpec[] = [
       { id: 'adj', type: 'neuron.adjacency', params: { groupByType: false } },
       { id: 'skel', type: 'neuron.skeletons', row: UNDER_TALL },
       { id: 'reduce', type: 'core.reduceMatrix', params: { stats: ['sum'] } },
-      { id: 'attach', type: 'neuron.attachAttributes', params: { matchOn: 'label' } },
+      { id: 'attach', type: 'neuron.attachAttributes' },
       {
         id: 'view',
         type: 'out.viewer3d',

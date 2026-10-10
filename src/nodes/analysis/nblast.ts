@@ -20,7 +20,7 @@
  */
 
 import { registerNode } from '../../core/registry'
-import { T } from '../../core/types'
+import { NEURONS_BOTH_AXES, T } from '../../core/types'
 import type { NblastSymmetry } from '../../pyodide/nblast'
 import { runNblast } from '../../pyodide/nblast'
 import {
@@ -31,7 +31,7 @@ import {
   nblastMatrix,
   nblastSidesFrom,
 } from '../lib/nblastOps'
-import { matrixAxisLabels } from '../lib/geometryLabels'
+import { matrixAxisLabels, matrixAxisLines } from '../lib/geometryLabels'
 // The ceiling is the *fetch's*, not this node's: nothing can reach here that the Skeletons
 // node would not hand over. Imported rather than restated, or "parity" is a comment.
 import { labelColumnParam, warnAboveParam } from '../lib/limitParams'
@@ -115,9 +115,9 @@ registerNode({
 
   /*
    * A matrix carries no schema — its labels are data, decided by the run — so there is nothing
-   * to infer beyond the kind. That is the same answer `core.pivot` gives for its Matrix half.
+   * to infer beyond the kind and that both axes are neurons, which an exporter reads.
    */
-  inferOutputs: () => ({ scores: T.matrix() }),
+  inferOutputs: () => ({ scores: T.matrix(NEURONS_BOTH_AXES) }),
 
   validate: (ctx) => nblastIssues(Number(ctx.params.resample)),
 
@@ -152,6 +152,8 @@ registerNode({
       targetValue,
       ctx.column('labelColumn'),
     )
-    return { scores: nblastMatrix(result, rowLabels, colLabels) }
+    return {
+      scores: nblastMatrix(result, rowLabels, colLabels, matrixAxisLines(query, targetValue)),
+    }
   },
 })

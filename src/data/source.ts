@@ -22,7 +22,7 @@ import { column, tableSchema } from '../core/types'
 import type {
   DatasetAnnotations,
   DatasetEdges,
-  MatrixValue,
+  AdjacencyMatrix,
   MeshesValue,
   PointsValue,
   SkeletonGeometry,
@@ -1047,7 +1047,8 @@ export interface DataSource {
    * side of the seam.
    */
   fetchPathStep?(req: PathStepRequest): Promise<TableValue>
-  fetchAdjacency(req: AdjacencyRequest): Promise<MatrixValue>
+  /** Every line says what it is (`AdjacencyMatrix`): Links reads the lines, never a label. */
+  fetchAdjacency(req: AdjacencyRequest): Promise<AdjacencyMatrix>
   /**
    * Per-neuron, per-region synapse counts.
    *

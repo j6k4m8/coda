@@ -23,7 +23,13 @@
 import type { CodaType, ColumnSchema, TableSchema } from '../../core/types'
 import type { EnumOption, ParamValues } from '../../core/node'
 import { column, tableSchema } from '../../core/types'
-import type { CellValue, ColumnData, TableValue } from '../../core/values'
+import type {
+  AdjacencyMatrix,
+  CellValue,
+  ColumnData,
+  MatrixLine,
+  TableValue,
+} from '../../core/values'
 import { makeTable, tableFromRows } from '../../core/values'
 import { datasetHasEdges } from './datasetParam'
 import { idColumn } from './tableOps'
@@ -849,4 +855,96 @@ export function readEdgeProperties(raw: unknown): string[] {
     (v): v is string => typeof v === 'string' && v !== '' && !RESERVED_EDGE_COLUMNS.has(v),
   )
   return [...new Set(names)]
+}
+
+/* ------------------------------------------------------------------------------------------
+ * Adjacency's Links: a matrix as Connectivity's edge list.
+ * ---------------------------------------------------------------------------------------- */
+
+/**
+ * The long half of an adjacency matrix, in Connectivity's columns, so the two edge lists feed the
+ * same nodes with the same pickers (Connection Compartments, Build Network's named defaults).
+ *
+ * **The ids are ids, never the matrix's labels.** A per-neuron label is a display string —
+ * `KCg-d 19102` on neuPrint — and Links carried it as `source`/`target` once, so every id-reading
+ * node downstream looked up a neuron called `KCg-d 19102` and found nothing. Each line's identity
+ * is `MatrixValue.lines`, written by the source that wrote the label. A type-grouped line has a
+ * type and no id, so its `preId` is null.
+ *
+ * `f64` weight with no unit, for `matrixToTable`'s reason: a cell is the weight or an edge
+ * property, and `MatrixValue.valueLabel` is no unit to copy.
+ */
+export const MATRIX_LINKS_SCHEMA: TableSchema = tableSchema(
+  column(PRE_ID, 'str'),
+  column(PRE_TYPE, 'str'),
+  column(POST_ID, 'str'),
+  column(POST_TYPE, 'str'),
+  column(WEIGHT_COLUMN, 'f64'),
+)
+
+/**
+ * A matrix as a long edge list — one row per **non-zero** cell, row-major.
+ *
+ * The other direction from `matrixToTable`, and the one a graph wants: until this existed a
+ * connection matrix was a dead end for every node that thinks in links. Each line's identity is
+ * `matrix.lines`, which an `AdjacencyMatrix` always has. A source types its lines where that is
+ * free; where it is not (a per-neuron CAVE or edge-set matrix, whose types would cost the whole
+ * neuron index), `typeOf` fills them — the node passes the tables wired in.
+ *
+ * **Zero cells are dropped, and that is the whole judgement in this function.** It looks like it
+ * contradicts `core.unpivot`, which keeps zeros on the stated grounds that "0 is a value somebody
+ * may have measured" — and the two really are answering different questions. Unpivot is handed an
+ * arbitrary wide table and cannot know what a zero meant. Here the zero was *manufactured*: a
+ * matrix cell has to hold something, so absence became 0 on the way in, which is exactly what
+ * `neuron.roiConnectivity` says as it does the reshape in the other direction ("in a *table*
+ * those rows are rightly absent — nothing was measured — but a matrix cell has to hold something,
+ * and 0 is what 'no connection found' means once a grid exists"). Dropping them going back is
+ * restoring the form the data had, not discarding measurements.
+ *
+ * The size argument is the same fact from the other end. A matrix is dense by construction, so
+ * keeping the zeros would emit `rows × cols` rows — 250,000 for a 500 × 500 adjacency, nearly all
+ * of them zero — and `Build Network` would turn that into a complete graph with a zero-weight
+ * link between every pair. That is not a large answer; it is a different one.
+ *
+ * Row-major and in the matrix's own axis order, so the result is deterministic: this value
+ * reaches a provenance key (invariant 4), and rows that reshuffled between runs would invalidate
+ * everything downstream for nothing.
+ */
+export function matrixToLinks(
+  matrix: AdjacencyMatrix,
+  typeOf: (id: string) => string | undefined = () => undefined,
+): TableValue {
+  // A neuron line its source left untyped (CAVE and edge sets per neuron) takes `typeOf`'s.
+  const typed = (line: MatrixLine): MatrixLine =>
+    line.type !== null || line.id === null
+      ? line
+      : { id: line.id, type: typeOf(line.id) ?? null }
+  const rows = matrix.lines.rows.map(typed)
+  const cols = matrix.lines.cols.map(typed)
+  const preId: ColumnData = []
+  const preType: ColumnData = []
+  const postId: ColumnData = []
+  const postType: ColumnData = []
+  const weight: ColumnData = []
+  const width = cols.length
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r]!
+    for (let c = 0; c < width; c++) {
+      const value = matrix.values[r * width + c] ?? 0
+      if (value === 0) continue
+      const col = cols[c]!
+      preId.push(row.id)
+      preType.push(row.type)
+      postId.push(col.id)
+      postType.push(col.type)
+      weight.push(value)
+    }
+  }
+  return makeTable(MATRIX_LINKS_SCHEMA, {
+    [PRE_ID]: preId,
+    [PRE_TYPE]: preType,
+    [POST_ID]: postId,
+    [POST_TYPE]: postType,
+    [WEIGHT_COLUMN]: weight,
+  })
 }

@@ -34,7 +34,7 @@ import type {
   CellValue,
   ColumnData,
   GeometryUnits,
-  MatrixValue,
+  AdjacencyMatrix,
   MeshGeometry,
   MeshesValue,
   PointsValue,
@@ -1095,7 +1095,7 @@ export class CaveSource implements DataSource {
     )
   }
 
-  async fetchAdjacency(req: AdjacencyRequest): Promise<MatrixValue> {
+  async fetchAdjacency(req: AdjacencyRequest): Promise<AdjacencyMatrix> {
     const { spec, version } = this.require(req.datasetId)
 
     const [edges, types] = await Promise.all([
@@ -1106,9 +1106,11 @@ export class CaveSource implements DataSource {
         undefined,
         req.signal,
       ),
-      req.groupByType ? this.typeLookup(req) : undefined,
+      // Only to group: per neuron the type would cost the whole neuron index cold, and the
+      // node fills it from the tables wired in (`matrixToLinks`).
+      req.groupByType ? this.typeLookup(req) : new Map<string, string>(),
     ])
-    return matrixFromEdges(edges, req.sourceIds, req.targetIds, types)
+    return matrixFromEdges(edges, req.sourceIds, req.targetIds, types, req.groupByType)
   }
 
   /**

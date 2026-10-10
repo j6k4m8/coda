@@ -21,6 +21,10 @@ registerNode({
   cost: 'cheap',
   inputs: [{ id: 'in', label: 'Matrix', type: T.matrix() }],
   outputs: [{ id: 'out', label: 'Matrix', type: T.matrix() }],
+  // Its input's type: the axes do not move, so which of them are neurons still holds.
+  inferOutputs: (ctx) => ({
+    out: ctx.inputs.in?.kind === 'matrix' ? ctx.inputs.in : T.matrix(),
+  }),
   params: [
     { id: 'mode', kind: 'enum', label: 'Mode', default: 'row', options: NORMALIZE_OPTIONS },
   ],

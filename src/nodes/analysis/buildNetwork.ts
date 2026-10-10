@@ -8,6 +8,7 @@
  * links between the same pair is noise, not information.
  */
 
+import { POST_ID, PRE_ID, WEIGHT_COLUMN } from '../lib/connectivityOps'
 import type { ColumnSchema, TableSchema } from '../../core/types'
 import {
   NUMERIC_DTYPES,
@@ -114,15 +115,24 @@ registerNode({
   ],
   outputs: [{ id: 'network', label: 'Network', type: T.network() }],
   params: [
-    { id: 'source', kind: 'column', label: 'Source', from: 'edges', default: '' },
-    { id: 'target', kind: 'column', label: 'Target', from: 'edges', default: '' },
+    /*
+     * Named for Connectivity's edge list, which Adjacency's Links and Synapses to Edges share, so
+     * those three wires need no picking. A table without these names falls back to its first
+     * column (rule 3) for both — which `validate` says is a self-loop. They were `''` once, which
+     * meant "first column" for both even on a Connectivity table: every link a self-loop until
+     * somebody set Target. A stored `''` reads as these defaults now, which changes only that
+     * case.
+     */
+    { id: 'source', kind: 'column', label: 'Source', from: 'edges', default: PRE_ID },
+    { id: 'target', kind: 'column', label: 'Target', from: 'edges', default: POST_ID },
     {
       id: 'weight',
       kind: 'column',
       label: 'Weight',
       from: 'edges',
       dtypes: NUMERIC_DTYPES,
-      default: '',
+      // Optional, so this reaches only new cards: a stored or missing `''` stays off.
+      default: WEIGHT_COLUMN,
       optional: true,
       help: 'Leave empty to weight every link by how many rows connect the pair.',
     },

@@ -112,7 +112,13 @@ export function isIdentifierColumn(name: string | undefined): boolean {
  * id is almost always a mistyped range), and that asymmetry is deliberate: authored text is a
  * mistake somebody can fix, where data is data.
  */
-const ID_GRAMMAR = /^-?\d+$/
+/**
+ * The grammar as a pattern body, unanchored, for the one place it leaves TypeScript: an exported
+ * notebook asks the same question of a label (`core.reduceMatrix`'s emitters), and a second
+ * spelling there is how the two would come to disagree.
+ */
+export const ID_PATTERN = '-?[0-9]+'
+const ID_GRAMMAR = new RegExp(`^${ID_PATTERN}$`)
 
 /** Whether a string is a well-formed id, i.e. safe to splice into a query unquoted. */
 export function isNeuronId(value: string): value is NeuronId {

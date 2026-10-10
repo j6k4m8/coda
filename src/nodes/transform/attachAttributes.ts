@@ -59,13 +59,15 @@
  * shape safe.
  */
 
-import { ID_COLUMN_NAME } from '../../core/ids'
+import { ID_COLUMN_NAME, idText } from '../../core/ids'
 import { GEOMETRY_KINDS, T } from '../../core/types'
 import type { TableSchema } from '../../core/types'
 import { columnNames } from '../../core/types'
 import { registerNode } from '../../core/registry'
 import { isTableValue } from '../../core/values'
+import type { TableValue } from '../../core/values'
 import { carriedGeometry, carriedSchema } from '../lib/carryParams'
+import { idColumn } from '../lib/tableOps'
 import type { GeometryValue } from '../lib/transformOps'
 import {
   geometryTypeOf,
@@ -140,12 +142,12 @@ registerNode({
       /*
        * The geometry side is always `neuronId`, so this names the column of the *table* holding
        * the same ids. `resolveColumn`'s rule 3 is the trap and `validate` below is the answer:
-       * on a table with no `neuronId` — a Reduce Matrix keys on `label` — a required picker
+       * on a table with no `neuronId` — a Cut Tree keys on `label` — a required picker
        * sitting on its declared default resolves to the **first compatible column**, which may
        * be a column of numbers and would match nothing while looking configured.
        */
       default: ID_COLUMN_NAME,
-      help: 'The table column holding neuron ids. Use `label` for tables from Reduce Matrix, Cut Tree or Embedding.',
+      help: 'The table column holding neuron ids. Reduce Matrix writes `neuronId`; use `label` for tables from Cut Tree or Embedding.',
     },
     {
       id: COLUMNS_PARAM,
@@ -218,6 +220,8 @@ registerNode({
     const table = ctx.input('table')
     if (!isTableValue(table)) throw new Error('Second input is not a table')
     const { key, columns } = readAttach(ctx, table.schema)
+    const silent = noMatchWarning(value.attributes, table, key)
+    if (silent) ctx.warn(silent)
     /*
      * The type argument is explicit because the value is a *union* of three collections: left to
      * infer, `V` widens to the constraint (`{ attributes: TableValue }`) and the return stops
@@ -226,3 +230,32 @@ registerNode({
     return { out: carriedGeometry<GeometryValue>(value, table, columns, key) }
   },
 })
+
+/**
+ * What to say when the join attaches nothing, which otherwise looks exactly like a scene whose
+ * attributes have not arrived. The commonest way in is a key column that exists and is empty: a
+ * Reduce Matrix over a matrix that records no neurons has a `neuronId` of nulls, and this node
+ * defaults to it.
+ */
+function noMatchWarning(
+  attributes: TableValue,
+  table: TableValue,
+  key: string,
+): string | undefined {
+  if (attributes.length === 0 || table.length === 0) return undefined
+  // The geometry is the small side — the neurons fetched — and the table often a whole index, so
+  // the set is the neurons' and the table is walked once, stopping at the first hit.
+  const neurons = new Set(idColumn(attributes))
+  let anyKey = false
+  for (const cell of table.data[key] ?? []) {
+    const id = idText(cell)
+    if (id === null) continue
+    if (neurons.has(id)) return undefined
+    anyKey = true
+  }
+  return anyKey
+    ? `No row of the table matched: its \`${key}\` holds none of these neurons' ids, so ` +
+        `nothing was attached. Check \`Match table on\`.`
+    : `\`${key}\` is empty in every row of the table, so nothing was attached. Set ` +
+        `\`Match table on\` to the column holding neuron ids.`
+}

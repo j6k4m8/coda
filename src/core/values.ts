@@ -10,6 +10,7 @@
 import type { FilterOp } from './rowPredicate'
 import type { CodaType, DType, PopulationFilter, TableSchema } from './types'
 import { datasetRef } from './types'
+import { isNeuronId } from './ids'
 
 export type CellValue = number | string | boolean | null
 export type ColumnData = CellValue[]
@@ -46,6 +47,41 @@ export interface MatrixValue {
   /** What the cells mean, for viewer axis/legend labels. */
   readonly valueLabel?: string
   readonly measure?: MatrixMeasure
+  /**
+   * What each row and column stands for, where the builder knows — **the one list of who
+   * records them**: Adjacency, NBLAST, syNBLAST, Distance, a Similarity over `neuronId`, and
+   * Neurons to ZapBench Traces (rows; its timesteps are lines that are neither). A line that is
+   * neither a neuron nor a type has id and type null. The labels are for display (`KCg-d 19102`
+   * on neuPrint, a `Label by` type) and are never parsed back; Links and Reduce Matrix's
+   * `neuronId` read these. Normalize keeps them; anything that reorders or relabels a matrix
+   * rebuilds it and drops them, rather than carrying lines that no longer match their labels.
+   */
+  readonly lines?: {
+    readonly rows: readonly MatrixLine[]
+    readonly cols: readonly MatrixLine[]
+  }
+}
+
+/** One matrix line: a neuron (its id, and its type where known), or a whole type (no id). */
+export interface MatrixLine {
+  readonly id: string | null
+  readonly type: string | null
+}
+
+/**
+ * The lines of an axis of neurons, by id. An id that is not a neuron id — an uploaded mesh's name —
+ * names no neuron, so its line has none rather than a claim `neuronId` would carry downstream.
+ */
+export function neuronLines(ids: readonly (string | null)[]): MatrixLine[] {
+  return ids.map((id) => ({ id: id !== null && isNeuronId(id) ? id : null, type: null }))
+}
+
+/** The matrix with what its lines are recorded beside its labels. */
+export function withLines(
+  matrix: MatrixValue,
+  lines: NonNullable<MatrixValue['lines']>,
+): MatrixValue {
+  return { ...matrix, lines }
 }
 
 export interface DatasetValue {
@@ -809,6 +845,15 @@ export function makeMatrix(
     ...(valueLabel ? { valueLabel } : {}),
     ...(measure ? { measure } : {}),
   }
+}
+
+/**
+ * An adjacency answer: a matrix whose every line says what it stands for. What
+ * `DataSource.fetchAdjacency` returns, so a source cannot hand over display labels alone — Links
+ * reads the lines and never a label (`matrixToLinks`).
+ */
+export type AdjacencyMatrix = MatrixValue & {
+  readonly lines: NonNullable<MatrixValue['lines']>
 }
 
 export function num(value: number): ScalarValue {
