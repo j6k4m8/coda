@@ -55,6 +55,7 @@ import {
   makeTable,
 } from '../../core/values'
 import { NM_PER_UM } from '../../data/units'
+import { widestSomaNode } from '../../data/soma'
 import { packPositions, packSkeletons } from './skeletonPacking'
 
 /**
@@ -256,7 +257,7 @@ export function segmentStats(
 }
 
 /**
- * The longest root-to-tip path, in the skeleton's own units.
+ * The longest soma-to-tip path, in the skeleton's own units — `rootDistances`' largest.
  *
  * Deliberately *not* fastcore's `longest_path`, which is the longest path between any two nodes
  * and therefore crosses the root — for a neuron that means "widest tip to widest tip", where what
@@ -273,18 +274,43 @@ export function maxRootDistance(
   return max
 }
 
-/** Path length from its root to every node, in the skeleton's own units. */
+/**
+ * Path length to every node from its soma, in the skeleton's own units.
+ *
+ * Measured from `widestSomaNode` across the soma's own fragment, in both directions along the
+ * cable, so a skeleton that arrived rooted somewhere else — neuPrint's SWC starts wherever the
+ * file does — still measures from its cell body. Every other fragment, and every fragment of a
+ * skeleton with no soma labelled, measures from its own root.
+ */
 export function rootDistances(
   skeleton: SkeletonGeometry,
   tree = skeletonTree(skeleton),
   distances = parentDistances(skeleton),
 ): Float64Array {
-  const depth = new Float64Array(skeleton.parents.length)
-  // Pre-order: a parent's depth is always resolved before its children are read.
+  const { parents } = skeleton
+  const n = parents.length
+  const depth = new Float64Array(n)
+  const seen = new Uint8Array(n)
+  /*
+   * One undirected walk — up through a parent as well as down through children, `buildArbor`'s
+   * walk without the arbor. The soma goes on the stack last so it is taken first, and its whole
+   * fragment is finished before that fragment's own root comes off the stack, already seen. A
+   * node's depth is set when it is pushed, from the node it was reached across.
+   */
   const stack = [...tree.roots]
+  const soma = widestSomaNode(skeleton)
+  if (soma >= 0) stack.push(soma)
   while (stack.length > 0) {
     const i = stack.pop()!
+    if (seen[i]) continue
+    seen[i] = 1
+    const parent = parents[i]!
+    if (parent >= 0 && parent < n && !seen[parent]) {
+      depth[parent] = depth[i]! + distances[i]!
+      stack.push(parent)
+    }
     for (const child of tree.children[i]!) {
+      if (seen[child]) continue
       depth[child] = depth[i]! + distances[child]!
       stack.push(child)
     }

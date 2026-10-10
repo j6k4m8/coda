@@ -124,6 +124,12 @@ export const CHANGELOG: readonly ChangelogEntry[] = [
         title: 'Fragmented skeletons are rooted at the soma.',
         body: 'neuPrint skeletons now label the node within 2 µm of the neuron’s `somaLocation` as its soma. **Clean Skeletons** (with **Heal**) and **Split Axon/Dendrite** reroot each skeleton at its soma after joining fragments, as navis does, instead of keeping the root of the largest fragment. Splits of neurons that were not rooted at their soma may change.',
       },
+      {
+        kind: 'changed',
+        date: '2026-10-10',
+        title: '**Topology**’s longest path is measured from the soma.',
+        body: 'The Morphology tab’s longest path and Skeleton to Points’ `rootDistance` now measure from the labelled soma rather than from wherever the skeleton file starts. Fragments without the soma still measure from their own root.',
+      },
     ],
   },
   {

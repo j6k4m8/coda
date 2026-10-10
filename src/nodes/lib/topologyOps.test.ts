@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { SkeletonGeometry } from '../../core/values'
-import { splitName } from '../../core/values'
+import { SWC_SOMA, splitName } from '../../core/values'
 import {
   GRID_SPREAD,
   cellKey,
@@ -22,6 +22,7 @@ import {
   classifyNodes,
   compartmentStats,
   maxRootDistance,
+  rootDistances,
   morphometrics,
   morphometricsSchema,
   morphometricsTable,
@@ -204,6 +205,25 @@ describe('maxRootDistance', () => {
      */
     const arms = skeletonOf([-1, 0, 1, 0, 3])
     expect(maxRootDistance(arms)).toBeCloseTo(2000, 6)
+  })
+
+  it('measures from a labelled soma the skeleton is not rooted at', () => {
+    // A 3 µm chain rooted at one end, its soma one node in: the far tip is 2 µm from the soma
+    // and the root 1 µm, against 3 µm from the root.
+    const chain = {
+      ...skeletonOf([-1, 0, 1, 2]),
+      compartments: new Uint8Array([0, SWC_SOMA, 0, 0]),
+    }
+    expect([...rootDistances(chain)]).toEqual([1000, 0, 1000, 2000])
+  })
+
+  it('measures the soma’s fragment from the soma and every other from its own root', () => {
+    // male-CNS 48122's shape: the soma in a small fragment, its arbour in a larger one beside it.
+    const pieces = {
+      ...skeletonOf([-1, 0, 1, 2, -1, 4]),
+      compartments: new Uint8Array([0, 0, 0, 0, 0, SWC_SOMA]),
+    }
+    expect([...rootDistances(pieces)]).toEqual([0, 1000, 2000, 3000, 1000, 0])
   })
 })
 
