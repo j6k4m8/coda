@@ -147,7 +147,20 @@ def _heal(parents, coords):
     return np.asarray(healed, dtype=np.int32)
 
 
-def _split_one(parents, presynapses, postsynapses, flow_thresh, split_val=SPLIT_VAL, coords=None):
+def _reroot_at(ids, parents, soma):
+    """`parents` rerooted at `soma`, or as they are where it is -1 or already the root.
+
+    `skeletons.py` holds the same three lines for the heal: each module runs in a namespace of its
+    own (`runtime.ts`), so neither can call the other's.
+    """
+    if soma < 0 or parents[soma] < 0:
+        return parents
+    return np.asarray(fc.reroot(ids, parents, [soma]), dtype=parents.dtype)
+
+
+def _split_one(
+    parents, presynapses, postsynapses, flow_thresh, split_val, soma, coords=None
+):
     """One neuron. Returns `(compartment, flow, status)`.
 
     `flow_thresh` and `split_val` are navis's two tuning knobs, in navis's own units: the linker
@@ -156,6 +169,8 @@ def _split_one(parents, presynapses, postsynapses, flow_thresh, split_val=SPLIT_
     (`split='prepost:0.5'`), which is why it is easy to miss that it exists at all.
 
     `coords` is the opt-in heal: given, a fragmented neuron is joined into one tree first.
+    `soma` is the node to root at, or -1 — navis's `reroot_soma=True`. After the heal, because
+    `heal_skeleton` keeps the largest fragment's root and the soma is often in another fragment.
     """
     n = len(parents)
     compartment = np.full(n, UNASSIGNED, dtype=np.int32)
@@ -175,6 +190,8 @@ def _split_one(parents, presynapses, postsynapses, flow_thresh, split_val=SPLIT_
     # navis raises here. We report instead - see the module docstring.
     if roots != 1:
         return compartment, flow, MULTIPLE_ROOTS
+
+    parents = _reroot_at(node_ids, parents, soma)
 
     if int(presynapses.sum()) == 0 or int(postsynapses.sum()) == 0:
         # A neuron with only one polarity has no flow to speak of: every node's centrality is 0,
@@ -314,6 +331,7 @@ def coda_split_compartments(request, report=None):
     flow_thresh = float(req.get("flowThresh", 0.9))
     split_val = float(req.get("splitVal", SPLIT_VAL))
     heal = bool(req.get("heal", False))
+    somas = np.frombuffer(req["somas"], dtype=np.int32)
     # Only healing needs to know where a node is, so the coordinates are sent only then — and kept
     # a float32 view here; `_heal` widens the one neuron it is healing.
     coords = np.frombuffer(req["points"], dtype=np.float32).reshape(-1, 3) if heal else None
@@ -337,6 +355,7 @@ def coda_split_compartments(request, report=None):
             postsynapses[a:b],
             flow_thresh,
             split_val,
+            int(somas[i]),
             coords=None if coords is None else coords[a:b],
         )
         compartment[a:b] = comp_i

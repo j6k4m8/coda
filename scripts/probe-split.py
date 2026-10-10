@@ -50,16 +50,14 @@ SETTINGS = [
 def coda_split(neuron, flow_thresh=0.9, split_val=1.0):
     """Coda's answer for one navis neuron, in navis's own node order.
 
-    Reproduces what the node does on the JavaScript side: reroot to soma (navis's
-    `reroot_soma=True`), reindex node ids to `0..n-1` so parents are row numbers — which is what
-    `SkeletonGeometry.parents` already holds — and count synapses per node, which Coda does by
-    nearest-node lookup in `assignSynapses` and navis reads off a `node_id` column.
+    Reproduces what the node does on the JavaScript side: reindex node ids to `0..n-1` so parents
+    are row numbers — which is what `SkeletonGeometry.parents` already holds — count synapses per
+    node, which Coda does by nearest-node lookup in `assignSynapses` and navis reads off a
+    `node_id` column, and hand over the soma's row for `_split_one` to reroot at (navis's
+    `reroot_soma=True`). The neuron is deliberately *not* rerooted here, so the reroot checked is
+    Coda's own.
     """
-    x = neuron.copy()
-    if np.any(x.soma) and not np.all(np.isin(x.soma, x.root)):
-        x.reroot(x.soma, inplace=True)
-
-    nodes = x.nodes.reset_index(drop=True)
+    nodes = neuron.nodes.reset_index(drop=True)
     index = {int(v): i for i, v in enumerate(nodes.node_id.values)}
     parents = np.array(
         [index.get(int(p), -1) if p >= 0 else -1 for p in nodes.parent_id.values],
@@ -68,14 +66,15 @@ def coda_split(neuron, flow_thresh=0.9, split_val=1.0):
 
     pre = np.zeros(len(nodes), dtype=np.uint32)
     post = np.zeros(len(nodes), dtype=np.uint32)
-    for node_id, kind in zip(x.connectors.node_id.values, x.connectors.type.values):
+    for node_id, kind in zip(neuron.connectors.node_id.values, neuron.connectors.type.values):
         i = index[int(node_id)]
         if str(kind) == "pre" or kind == 0:
             pre[i] += 1
         else:
             post[i] += 1
 
-    compartment, _, status = topology._split_one(parents, pre, post, flow_thresh, split_val)
+    soma = index[int(np.atleast_1d(neuron.soma)[0])] if np.any(neuron.soma) else -1
+    compartment, _, status = topology._split_one(parents, pre, post, flow_thresh, split_val, soma)
     return nodes.node_id.values, np.array([NAMES[int(c)] for c in compartment]), status
 
 

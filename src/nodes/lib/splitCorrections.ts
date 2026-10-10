@@ -30,6 +30,7 @@ import { CODE_AXON, CODE_DENDRITE, CODE_LINKER, perGeometry } from '../../core/v
 import type { SkeletonGeometry } from '../../core/values'
 import type { Arbor } from './arborOps'
 import { buildArbor, resolveRoot } from './arborOps'
+import { nearestNode } from '../../data/soma'
 
 /** The param the node stores them in, spelled once for the node and the editor. */
 export const CORRECTIONS_PARAM = 'corrections'
@@ -138,20 +139,7 @@ export function splitArbor(skeleton: SkeletonGeometry, root?: number): Arbor {
 
 /** The nearest node to a point within `SNAP_NM`, or -1. */
 export function snapToNode(skeleton: SkeletonGeometry, at: readonly number[]): number {
-  const p = skeleton.positions
-  let best = -1
-  let bestD = SNAP_NM * SNAP_NM
-  for (let i = 0; i < skeleton.parents.length; i++) {
-    const dx = p[i * 3]! - at[0]!
-    const dy = p[i * 3 + 1]! - at[1]!
-    const dz = p[i * 3 + 2]! - at[2]!
-    const d = dx * dx + dy * dy + dz * dz
-    if (d <= bestD) {
-      bestD = d
-      best = i
-    }
-  }
-  return best
+  return nearestNode(skeleton.positions, at, SNAP_NM)
 }
 
 /**

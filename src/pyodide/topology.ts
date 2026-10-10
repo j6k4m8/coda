@@ -69,6 +69,12 @@ export type SplitCompartmentsRequest = {
    */
   points: Float32Array
   /**
+   * Per neuron, the neuron-local soma node (`packSkeletons`') or `-1`. The tree is rerooted there,
+   * after any heal, before flow is computed — navis's `reroot_soma=True`: flow's branch-point
+   * correction reads which way the tree points.
+   */
+  somas: Int32Array
+  /**
    * Send back the synapse flow per node — the number the linker threshold is applied to. Off for
    * every caller that only wants the labels: a float per node is the largest thing this returns.
    */

@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { column, tableSchema } from '../../core/types'
 import type { PointsValue, SkeletonsValue } from '../../core/values'
-import { makeTable } from '../../core/values'
+import { SWC_SOMA, makeTable } from '../../core/values'
 import type * as TopologyBridge from '../../pyodide/topology'
 import type { SplitCompartmentsRequest } from '../../pyodide/topology'
 import type { SplitCorrection } from './splitCorrections'
@@ -155,6 +155,24 @@ describe('splitSkeletons', () => {
     await splitSkeletons(skeletons(), new Map(), { ...SETTINGS, heal: true })
     expect(lengths).toEqual([0, 15])
     expect(mockedRun.mock.calls[1]![0]).toMatchObject({ heal: true, flowThresh: 0.9 })
+  })
+
+  it('names each neuron’s soma node for the reroot, and -1 where none is labelled', async () => {
+    // navis's `reroot_soma=True`: a skeleton rooted in its arbour splits differently. Neuron 22
+    // labels three soma nodes and the widest wins; neuron 11 labels none, so -1.
+    const value = skeletons()
+    value.items[0] = {
+      ...value.items[0]!,
+      radii: new Float32Array([0, 300, 500]),
+      compartments: new Uint8Array([SWC_SOMA, SWC_SOMA, SWC_SOMA]),
+    }
+    let somas: number[] = []
+    mockedRun.mockImplementation((request) => {
+      somas = [...request.somas]
+      return echo(request)
+    })
+    await splitSkeletons(value, new Map(), SETTINGS)
+    expect(somas).toEqual([2, -1])
   })
 
   it('reports progress over its own 0..1, the bridge’s share after the assignment', async () => {

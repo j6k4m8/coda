@@ -112,6 +112,21 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    date: '2026-10-10',
+    title: 'Skeletons rooted at the soma',
+    summary:
+      'neuPrint skeletons now mark their soma, and healing and Split Axon/Dendrite root a skeleton there.',
+    highlight: false,
+    items: [
+      {
+        kind: 'changed',
+        date: '2026-10-10',
+        title: 'Fragmented skeletons are rooted at the soma.',
+        body: 'neuPrint skeletons now label the node within 2 µm of the neuron’s `somaLocation` as its soma. **Clean Skeletons** (with **Heal**) and **Split Axon/Dendrite** reroot each skeleton at its soma after joining fragments, as navis does, instead of keeping the root of the largest fragment. Splits of neurons that were not rooted at their soma may change.',
+      },
+    ],
+  },
+  {
     date: '2026-10-08',
     title: 'Adjacency, one neuron per row',
     summary:

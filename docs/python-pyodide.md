@@ -153,6 +153,16 @@ Four conventions carry it, each established against the runtime rather than assu
   `PyArg` and the call fails to compile with a message about `undefined`. Not obvious from the
   error; worth knowing before writing the second wrapper.
 
+**Each module runs in a namespace of its own**, a fresh `dict` handed to `runPython` as
+`globals`, and the entry function is read from there. Until 2026-10-10 every module ran into the
+one `py.globals`, so a private helper defined in two files was whichever loaded last:
+`meshes.py` and `skeletons.py` both define `_clean_one`, and Clean Meshes followed by Clean
+Skeletons raised `TypeError: _clean_one() takes 3 positional arguments but 6 were given` —
+reproduced in Pyodide, along with the fix. The price is that a helper two modules need is written
+in each (`_reroot_at`); no module reads another's globals, which was checked over every `.py`
+before the change. The `scripts/probe-*.mjs` probes still run one module into `py.globals`, which
+is the same thing when only one is loaded.
+
 `toJs` **copies** out of the wasm heap, checked rather than assumed — so a result outlives the
 proxy it came from, while every proxy taken is still destroyed where it was taken.
 

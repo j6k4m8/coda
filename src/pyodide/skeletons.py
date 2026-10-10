@@ -61,7 +61,18 @@ def _reindex(node_ids, parent_ids):
     return np.where(parent_ids >= 0, lookup[np.maximum(parent_ids, 0)], -1).astype(np.int32)
 
 
-def _clean_one(coords, parents, radii, labels, opts):
+def _reroot_at(ids, parents, soma):
+    """`parents` rerooted at `soma`, or as they are where it is -1 or already the root.
+
+    `topology.py` holds the same three lines for the split: each module runs in a namespace of its
+    own (`runtime.ts`), so neither can call the other's.
+    """
+    if soma < 0 or parents[soma] < 0:
+        return parents
+    return np.asarray(fc.reroot(ids, parents, [soma]), dtype=parents.dtype)
+
+
+def _clean_one(coords, parents, radii, labels, opts, soma):
     """One neuron through the whole pipeline. Coordinates float64, radii float64, labels uint8.
 
     Returns `(coords, parents, radii, labels)` with parents already re-based onto row numbers.
@@ -89,6 +100,8 @@ def _clean_one(coords, parents, radii, labels, opts):
             ),
             dtype=np.int64,
         )
+        # `heal_skeleton` keeps the largest fragment's root; the soma takes it back.
+        parents = _reroot_at(ids, parents, soma)
 
     if opts["smooth"] > 0 and n > 2:
         # Coordinates only. `values=` would let a radius ride along in the same pass, and
@@ -161,6 +174,7 @@ def coda_clean_skeletons(request, report=None):
     rad = np.frombuffer(req["radii"], dtype=np.float32).astype(np.float64)
     lab = np.frombuffer(req["compartments"], dtype=np.uint8)
     off = np.frombuffer(req["offsets"], dtype=np.int32)
+    somas = np.frombuffer(req["somas"], dtype=np.int32)
     count = len(off) - 1
 
     opts = {
@@ -183,7 +197,7 @@ def coda_clean_skeletons(request, report=None):
         a, b = int(off[i]), int(off[i + 1])
         if b > a:
             coords, parents, radii, labels = _clean_one(
-                np.ascontiguousarray(xyz[a:b]), par[a:b], rad[a:b], lab[a:b], opts
+                np.ascontiguousarray(xyz[a:b]), par[a:b], rad[a:b], lab[a:b], opts, int(somas[i])
             )
             out_coords.append(coords)
             out_parents.append(parents)

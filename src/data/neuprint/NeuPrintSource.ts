@@ -144,6 +144,7 @@ import { SKELETON_ROUTES, route } from '../skeletonRoutes'
 import type { DiscoveredSchema } from './schema'
 import { discoverEdgeProperties, discoverNeuronSchema, schemasFor } from './schema'
 import type { VoxelScale } from '../units'
+import { withSomaAt } from '../soma'
 import {
   IDENTITY_SCALE,
   geometryUnitsFor,
@@ -215,6 +216,8 @@ interface NeuronRow {
   instance: string | null
   status: string | null
   size: number | null
+  /** `somaLocation`, in dataset voxels; null for a body with no soma recorded. */
+  soma: [number, number, number] | null
 }
 
 /**
@@ -1351,12 +1354,25 @@ export class NeuPrintSource implements DataSource {
   ): SkeletonsValue {
     const data: Record<string, ColumnData> = {}
     for (const col of schema.columns) data[col.name] = []
+    const scale = this.scaleFor(datasetId)
+    const items: SkeletonGeometry[] = []
     for (const [neuronId, item] of pairs) {
-      pushNeuronRow(data, neuronId, meta.get(neuronId))
+      const row = meta.get(neuronId)
+      pushNeuronRow(data, neuronId, row)
       data['points']!.push(item.parents.length)
       data['cableLength']!.push(cableLength(item))
+      // Neither route labels a soma, so `somaLocation` says where it is — in voxels, where both
+      // routes are nanometres by now, hence the scale.
+      items.push(
+        row?.soma
+          ? withSomaAt(
+              item,
+              [row.soma[0] * scale[0], row.soma[1] * scale[1], row.soma[2] * scale[2]],
+              SOMA_SNAP_NM,
+            )
+          : item,
+      )
     }
-    const items = pairs.map(([, item]) => item)
     return {
       kind: 'skeletons',
       items,
@@ -1772,7 +1788,7 @@ export class NeuPrintSource implements DataSource {
     const cypher = [
       'MATCH (n:Neuron)',
       `WHERE n.bodyId IN ${idList(neuronIds)}`,
-      'RETURN n.bodyId, n.type, n.instance, n.status, n.size',
+      'RETURN n.bodyId, n.type, n.instance, n.status, n.size, n.somaLocation',
     ].join('\n')
     const response = await runCypher(cypher, datasetId, this.options(signal))
     for (const row of response.data) {
@@ -1781,6 +1797,7 @@ export class NeuPrintSource implements DataSource {
         instance: row[2] === null || row[2] === undefined ? null : String(row[2]),
         status: row[3] === null || row[3] === undefined ? null : String(row[3]),
         size: row[4] === null || row[4] === undefined ? null : Number(row[4]),
+        soma: somaPoint(row[5]),
       })
     }
     return out
@@ -1790,6 +1807,26 @@ export class NeuPrintSource implements DataSource {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * How far `somaLocation` may sit from the node that stands for it: half of a 4 µm soma, the
+ * largest a fly soma gets. The location is the soma's centre, so anything further than its radius
+ * is a skeleton that does not reach the soma at all, and labelling some distant node would root
+ * the arbour in the wrong place with every downstream measure agreeing.
+ */
+export const SOMA_SNAP_NM = 2000
+
+/**
+ * A neo4j spatial point as `[x, y, z]`, or null. neuPrint returns `somaLocation` as
+ * `{type: 'Point', coordinates: [x, y, z], crs}`; anything else — absent, a malformed list — is
+ * no soma rather than a soma at the origin.
+ */
+export function somaPoint(cell: unknown): [number, number, number] | null {
+  const coords = (cell as { coordinates?: unknown } | null | undefined)?.coordinates
+  if (!Array.isArray(coords) || coords.length < 3) return null
+  const [x, y, z] = coords.map(Number)
+  return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) ? [x!, y!, z!] : null
+}
 
 /** `hemibrain:v1.2.1` -> label "hemibrain", version "v1.2.1". */
 export function splitDatasetId(id: string): [string, string | undefined] {

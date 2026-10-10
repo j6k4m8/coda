@@ -889,8 +889,9 @@ export function flattenForSplit(
   presynapses: Uint32Array
   postsynapses: Uint32Array
   points: Float32Array
+  somas: Int32Array
 } {
-  const { parents, offsets, total } = packSkeletons(skeletons)
+  const { parents, offsets, somas, total } = packSkeletons(skeletons)
   const presynapses = new Uint32Array(total)
   const postsynapses = new Uint32Array(total)
   const points = withPoints ? packPositions(skeletons, offsets) : new Float32Array(0)
@@ -902,5 +903,5 @@ export function flattenForSplit(
     postsynapses.set(assignment.post, offsets[i]!)
   }
 
-  return { parents, offsets, presynapses, postsynapses, points }
+  return { parents, offsets, presynapses, postsynapses, points, somas }
 }

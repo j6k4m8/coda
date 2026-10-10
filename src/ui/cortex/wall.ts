@@ -8,7 +8,8 @@
  */
 
 import type { SkeletonGeometry } from '../../core/values'
-import { SWC_SOMA, compartmentKey } from '../../core/values'
+import { compartmentKey } from '../../core/values'
+import { resolveRoot } from '../../nodes/lib/arborOps'
 import { quantileSorted } from '../../core/stats'
 import type { ColumnWidths } from '../../packs/cortex/cells'
 import type { CorticalFrame } from '../../packs/cortex/frames'
@@ -44,7 +45,7 @@ const inkOf = (code: number): Ink => {
  * A skeleton in the frame. Remembered per skeleton object, so a re-render, a resize or a re-layout
  * never projects a neuron twice — the projection is the one pass over every vertex.
  *
- * The soma is the point labelled soma where the source labels one, the root otherwise; lateral
+ * The soma is `resolveRoot('soma')`'s, the node the split and the dendrogram root at; lateral
  * positions are relative to it, so a column is centred on its cell body. Segments are bucketed by
  * ink here, once, rather than classified again on every draw.
  */
@@ -53,9 +54,7 @@ export function cellGeometry(skeleton: SkeletonGeometry, frame: CorticalFrame): 
   if (held) return held
   const points = projector(frame).project(skeleton.positions)
   const count = skeleton.parents.length
-  const labels = skeleton.compartments
-  const labelledSoma = labels ? labels.indexOf(SWC_SOMA) : -1
-  const soma = labelledSoma >= 0 ? labelledSoma : Math.max(0, skeleton.parents.indexOf(-1))
+  const soma = Math.max(0, resolveRoot(skeleton, 'soma').node)
   const somaLateral = points[soma * 3] ?? 0
 
   const buckets: Record<Ink, Float32Array> = {
@@ -73,7 +72,7 @@ export function cellGeometry(skeleton: SkeletonGeometry, frame: CorticalFrame): 
     const parent = skeleton.parents[i]!
     // A parent outside the tree is a malformed file, not a segment to draw off into nowhere.
     if (parent < 0 || parent >= count) continue
-    const ink = inkOf(labels?.[i] ?? 0)
+    const ink = inkOf(skeleton.compartments?.[i] ?? 0)
     const at = fill[ink]
     const out = buckets[ink]
     out[at] = lateral

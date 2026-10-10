@@ -337,6 +337,23 @@ below 0.5004 — and why presynaptic scores top out at 0.98 there, 0.99 on MANC,
 A `>= 1` threshold therefore returns no presynaptic site at all on three of the four datasets,
 which is what the Synapses node's old `Min weight` default did.
 
+### A skeleton's soma is `somaLocation`, snapped within 2 µm
+
+Neither skeleton route labels a soma: the SWC endpoint is JSON with `rowId, x, y, z, radius, link`
+and no structure code, and the published layer has none either. Without a label,
+`resolveRoot('soma')` falls back to the largest fragment's root, which on a fragmented skeleton is
+often arbour. Male-CNS 48122 has two roots: a 796-node fragment rooted ~200 µm from the cell body,
+and a 38-node fragment of radius ~1.3 µm whose root is 1.15 µm from `somaLocation`. The dendrogram
+drew its soma dot on the first.
+
+So `fetchNeuronRows` also returns `n.somaLocation`, a neo4j point read by `somaPoint`.
+`assembleSkeletons` scales it to nanometres and labels the nearest node `SWC_SOMA` through
+`withSomaAt` (`data/soma.ts`). It does so only within `SOMA_SNAP_NM`, 2 µm: half of a 4 µm
+soma, the largest a fly soma gets, and `somaLocation` is the soma's centre. A node further away
+means a skeleton that does not reach the soma, and labelling one would root the arbour somewhere
+arbitrary. A source's own soma label wins. The labelled copy is a new object, because
+`cachedGeometry` shares the stored one.
+
 ### Signing in through DatasetGateway
 
 `data/neuprint/signIn.ts` plus `ui/panels/neuprintSignIn.ts`, on the window machinery CAVE's

@@ -16,7 +16,7 @@ import { NUMERIC_DTYPES, column, tableSchema } from '../../core/types'
 import { cableLength, getColumn } from '../../core/values'
 import type { FilterRow } from '../filterRows'
 
-import { NeuPrintSource } from './NeuPrintSource'
+import { NeuPrintSource, somaPoint } from './NeuPrintSource'
 import { PATH_STEP_SCHEMA } from '../source'
 import { SYNAPSE_UNITS } from '../synapseUnits'
 import { THUMBNAIL_MAX_BYTES, THUMBNAIL_MAX_FLAT_BYTES } from '../precomputed'
@@ -2583,5 +2583,22 @@ describe('synapsesBetweenCypher', () => {
     expect(synapsesBetweenCypher({ ...base, minConfidence: 0.7 })).toContain(
       'WHERE ns.confidence >= 0.7 AND ms.confidence >= 0.7',
     )
+  })
+})
+
+describe('somaPoint', () => {
+  it('reads a neo4j point and nothing else', () => {
+    // As neuPrint returns male-CNS 48122's `somaLocation`.
+    const point = {
+      coordinates: [59928, 14579, 36482],
+      crs: { name: 'cartesian-3d' },
+      type: 'Point',
+    }
+    expect(somaPoint(point)).toEqual([59928, 14579, 36482])
+    // Absent or malformed is no soma, never a soma at the origin.
+    expect(somaPoint(null)).toBeNull()
+    expect(somaPoint(undefined)).toBeNull()
+    expect(somaPoint({ coordinates: [1, 2] })).toBeNull()
+    expect(somaPoint({ coordinates: [1, 'x', 3] })).toBeNull()
   })
 })

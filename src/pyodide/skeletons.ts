@@ -41,6 +41,11 @@ export type CleanSkeletonsRequest = {
   compartments: Uint8Array
   /** Where each neuron starts, counted in points. Length is `count + 1`. */
   offsets: Int32Array
+  /**
+   * Per neuron, the neuron-local soma node to reroot at after the heal, or `-1`
+   * (`PackedSkeletons.somas`).
+   */
+  somas: Int32Array
 
   /** Reconnect the fragments a reconstruction arrived in. */
   heal: boolean

@@ -121,6 +121,15 @@ a `splitSummarySchema()` / `splitSummaryTable()` pair, with an agreement test.
 - **A synapse's `compartment` is the split's, and the column says it.** It is named `compartment`,
   but the help and the schema description say "computed". The source's SWC label is
   `Skeleton to Points`' column, which is a different thing.
+- **The tree is rerooted at the soma before flow is computed** (after any heal), as navis's
+  `reroot_soma=True` does by default. *Built, 2026-10-10:* flow's branch-point correction reads
+  which way the tree points, so male-CNS 48122 rooted in its arbour split differently from the same
+  skeleton rooted at its cell body. The request carries `somas` from `packSkeletons`
+  (`widestSomaNode`, or `-1` where none is labelled), so the heal and the split reroot at one node.
+  `probe:split` hands navis's neurons over *un*rerooted, so the reroot it checks is Coda's (three of
+  its five are not rooted at the soma). Healing roots at the soma too (`skeletons.py`, after
+  `heal_skeleton`, which keeps the *largest* fragment's root), so the editor's dendrogram, drawn
+  from a heal, starts at the cell body.
 
 ## Node 2: connection types
 

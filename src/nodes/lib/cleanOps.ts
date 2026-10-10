@@ -156,7 +156,7 @@ export function cleanRequestFrom(
 ): CleanSkeletonsRequest {
   // `parents`, `offsets` and `points` are `skeletonPacking.ts`' — that layout and both of its
   // rules are shared with every other Pyodide skeleton call. What is local here is `radii`.
-  const { parents, offsets, total } = packSkeletons(skeletons)
+  const { parents, offsets, somas, total } = packSkeletons(skeletons)
   const points = packPositions(skeletons, offsets)
   const radii = new Float32Array(total)
   // Zeros for a neuron that carried no labels; `skeletonsFromResult` drops them again for it.
@@ -176,6 +176,7 @@ export function cleanRequestFrom(
     radii,
     compartments,
     offsets,
+    somas,
     heal: params.heal,
     healMaxDist: params.healMaxDist * NM_PER_UM,
     smooth: params.smooth * NM_PER_UM,
