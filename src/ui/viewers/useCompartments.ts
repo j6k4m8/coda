@@ -24,7 +24,7 @@ import { errorMessage } from '../../core/errors'
 import type { SkeletonGeometry } from '../../core/values'
 import { splitSkeletons } from '../../nodes/lib/compartmentOps'
 import type { SynapseAssignment, SynapseSite } from '../../nodes/lib/topologyOps'
-import type { SplitStatus } from '../../pyodide/topology'
+import type { SplitStatus } from '../../nodes/lib/splitStatus'
 
 export interface Compartments {
   /** One compartment code per skeleton node — `CODE_*` in `core/values.ts`. */
@@ -87,7 +87,7 @@ export function useCompartments(
         const split = await splitSkeletons(
           { items: [skeleton] },
           new Map([[skeleton.id, { sites: sites ?? [] }]]),
-          { flowThresh, splitVal, heal },
+          { method: 'flow', flowThresh, splitVal, heal },
         )
         const data: Compartments = {
           labels: split.labels[0]!,

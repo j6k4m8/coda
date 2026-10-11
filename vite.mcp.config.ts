@@ -71,8 +71,12 @@ const BUILD_INPUTS = ['package.json', 'pnpm-lock.yaml', 'vite.mcp.config.ts']
  * Annotate card's definition and target settings, both help pages — and the Scatter Plot's labels
  * and search. Code and prose of ours: the annotation write paths (SeaTable, Clio, CSV) are reached
  * only from the card and are not in this bundle, and the readers stay external.
+ *
+ * 3,050 → 3,100 on 2026-10-11, at 3,061 kB against about 3,035 kB at the commit before it, for
+ * Split Axon/Dendrite's three new methods (label propagation, by ROI, by tag), node tags on
+ * skeletons and the node's rewritten help page. Code and prose of ours; no new library.
  */
-const SIZE_BUDGET_KB = 3_050
+const SIZE_BUDGET_KB = 3_100
 
 /**
  * Fail the build if the bundle outgrows its budget.

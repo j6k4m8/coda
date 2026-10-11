@@ -58,6 +58,9 @@ LINKER = 3
 OK = 0
 MULTIPLE_ROOTS = 1
 NO_SYNAPSES = 2
+# Label propagation hit its iteration cap: navis's own warning sign that the answer may be noise.
+# The labels are still returned, as navis returns them.
+NOT_CONVERGED = 3
 
 # navis's own defaults, named rather than inlined so the two that surprise people are greppable.
 FLOW_MODE = "sum"
@@ -313,6 +316,139 @@ def _split_one(
     return compartment, flow, OK
 
 
+def _propagate_one(
+    parents, presynapses, postsynapses, coords, weighting, alpha, max_iter, tol, heal, progress=None
+):
+    """One neuron by label propagation. Returns `(compartment, probability, status)`.
+
+    navis's `split_axon_dendrite_prop` with `label_only=True`, ported line for line where it can
+    be, and `pnpm probe:split` holds the two to the same answer. What differs is only how:
+
+    - navis builds a scipy sparse adjacency and multiplies by it. There is no scipy in the Pyodide
+      lock, and none is needed on a tree: `S @ F` is each node's neighbours' scores, weighted by
+      edge length and divided by its own total edge length — a gather over the edges in scipy's CSR
+      order and one `reduceat` over both labels, in float32 as navis's matrix is.
+    - navis snaps each synapse to its nearest node itself; here the counts arrive per node,
+      assigned on the TypeScript side as the flow split's are.
+
+    Only axon and dendrite: label propagation has no linker. A node no signal reached (a fragment
+    without synapses, when not healed) stays unassigned, with probability 0.
+    """
+    n = len(parents)
+    compartment = np.full(n, UNASSIGNED, dtype=np.int32)
+    probability = np.zeros(n, dtype=np.float32)
+    if n == 0:
+        return compartment, probability, OK
+
+    if heal and int((parents < 0).sum()) > 1:
+        parents = _heal(parents, coords)
+
+    pre = presynapses.astype(np.float32)
+    post = postsynapses.astype(np.float32)
+    if pre.sum() == 0 or post.sum() == 0:
+        return compartment, probability, NO_SYNAPSES
+
+    # navis's `_calc_pre_post`: a node with more outputs than inputs is a `pre` seed, more inputs a
+    # `post` seed, a tie no seed; its weight is the difference.
+    is_pre = pre > post
+    is_post = post > pre
+    if weighting == "none":
+        weight = np.ones(n, dtype=np.float32)
+    else:
+        weight = np.abs(post - pre)
+        if weighting == "balance":
+            # Scaled by the synapse totals, so the commoner type does not win by numbers alone.
+            weight[is_pre] *= np.float32(post.sum() / pre.sum())
+    # Columns in navis's sorted label order: `post`, then `pre`.
+    Y = np.zeros((n, 2), dtype=np.float32)
+    Y[is_post, 0] = weight[is_post]
+    Y[is_pre, 1] = weight[is_pre]
+
+    # The undirected adjacency, each edge weighted by its length, rows normalised — laid out as
+    # scipy's CSR would be (by row, then column) and summed in float32 in that order. Not for
+    # speed: navis stops when the hard labels have not changed for two iterations, and a dendrite
+    # front reaching unreached nodes changes none (both score 0, so `argmax` already says `post`).
+    # When it stops therefore turns on float rounding elsewhere; summed in float64 instead, the
+    # port stopped two iterations early on one example neuron and left two nodes unassigned. What
+    # remains is scipy's compiled product against numpy's, one ulp apart (2.4e-7) at a tied score:
+    # with `alpha=0` and no weights navis then stops two iterations later. `probe:split` allows it.
+    child = np.flatnonzero(parents >= 0)
+    parent = parents[child].astype(np.int64)
+    length = np.sqrt(((coords[child] - coords[parent]) ** 2).sum(axis=1), dtype=np.float32)
+    rows = np.concatenate([child, parent])
+    cols = np.concatenate([parent, child])
+    order = np.lexsort((cols, rows))
+    rows, cols = rows[order], cols[order]
+    weight_edge = np.concatenate([length, length])[order]
+    has_edges = np.zeros(n, dtype=bool)
+    has_edges[rows] = True
+    starts = np.flatnonzero(np.diff(rows, prepend=-1))
+    # A row's total by numpy's own reduction over it, which is what scipy's `A.sum(axis=1)` is: an
+    # element-by-element float32 sum differs in the last bit, and that alone moved the stop.
+    row_sum = np.ones(n, dtype=np.float32)
+    row_sum[has_edges] = np.add.reduceat(weight_edge, starts)
+    row_sum[row_sum == 0] = 1
+    s_col = ((np.float32(1.0) / row_sum)[rows] * weight_edge)[:, None]
+    # One gather buffer for every step, and no scatter where every node has an edge (any tree of
+    # more than one node, healed or whole). Both columns in one `reduceat`, which sums each column
+    # in the same order the per-column version did — checked bitwise against it.
+    gathered = np.empty((len(cols), 2), dtype=np.float32)
+    every_node = bool(has_edges.all())
+
+    def step(F):
+        np.take(F, cols, axis=0, out=gathered)
+        np.multiply(gathered, s_col, out=gathered)
+        summed = np.add.reduceat(gathered, starts, axis=0)
+        if every_node:
+            return summed
+        out = np.zeros_like(F)
+        out[has_edges] = summed
+        return out
+
+    # navis's clamping: 0 holds the seeds fixed, 1 lets them change freely, between is soft.
+    seed = np.flatnonzero(is_pre | is_post)
+    held = Y[seed] if alpha == 0 else (1 - alpha) * Y[seed]
+    F = Y.copy()
+    F_max = F.max() + 1e-16 if tol < 1 else None
+    # `argmax` over the two columns, with its tie rule (to `post`), at a fraction of the cost.
+    prev_hard = F[:, 1] > F[:, 0]
+    n_hard = 0
+    converged = False
+    for it in range(max_iter):
+        F_new = step(F)
+        if alpha == 0:
+            F_new[seed] = held
+        elif alpha < 1:
+            F_new[seed] = alpha * F_new[seed] + held
+        if tol >= 1:
+            # navis counts iterations with unchanged hard labels without resetting the count.
+            hard = F_new[:, 1] > F_new[:, 0]
+            if np.array_equal(hard, prev_hard):
+                n_hard += 1
+            converged = n_hard > tol
+            prev_hard = hard
+        else:
+            converged = np.abs(F_new - F).max() / F_max < tol
+        F = F_new
+        if converged:
+            break
+        # A neuron that does not converge runs every iteration, so say where it is, not just which.
+        if progress is not None and it % 200 == 199:
+            progress(it + 1)
+
+    total = F.sum(axis=1)
+    reached = F.max(axis=1) > 0
+    norm = np.zeros_like(F)
+    norm[reached] = F[reached] / total[reached, None]
+    diff = norm[:, 1] - norm[:, 0]
+    compartment[reached & (diff > 0)] = AXON
+    compartment[reached & (diff < 0)] = DENDRITE
+    probability[reached] = norm[reached].max(axis=1)
+    # Labelled either way, as navis does: hitting the cap is a warning sign rather than an empty
+    # answer, and the status is how the card says it.
+    return compartment, probability, OK if converged else NOT_CONVERGED
+
+
 def coda_split_compartments(request, report=None):
     """A whole set of skeletons split in one crossing.
 
@@ -332,11 +468,20 @@ def coda_split_compartments(request, report=None):
     split_val = float(req.get("splitVal", SPLIT_VAL))
     heal = bool(req.get("heal", False))
     somas = np.frombuffer(req["somas"], dtype=np.int32)
-    # Only healing needs to know where a node is, so the coordinates are sent only then — and kept
-    # a float32 view here; `_heal` widens the one neuron it is healing.
-    coords = np.frombuffer(req["points"], dtype=np.float32).reshape(-1, 3) if heal else None
+    propagate = req.get("method") == "propagation"
+    # Healing and propagation (its edges are weighted by length) are what need to know where a
+    # node is, so the coordinates are sent only then — and kept a float32 view here.
+    coords = (
+        np.frombuffer(req["points"], dtype=np.float32).reshape(-1, 3) if heal or propagate else None
+    )
     if coords is not None and len(coords) != len(parents):
-        raise ValueError(f"heal needs one point per node: {len(coords)} for {len(parents)}")
+        raise ValueError(f"positions need one point per node: {len(coords)} for {len(parents)}")
+    if propagate:
+        # Always sent with the method: the card's defaults are the ones that apply, not navis's.
+        weighting = str(req["weighting"])
+        alpha = float(req["alpha"])
+        max_iter = int(req["maxIter"])
+        tol = float(req["tol"])
     count = len(offsets) - 1
 
     compartment = np.full(len(parents), UNASSIGNED, dtype=np.int32)
@@ -344,35 +489,61 @@ def coda_split_compartments(request, report=None):
     # Opt-in, for the reason the return below records: a float per node is the largest thing this
     # call can send back, and only a caller that draws the flow wants it.
     flow = np.zeros(len(parents), dtype=np.float32) if req.get("flow") else None
+    probability = np.zeros(len(parents), dtype=np.float32) if req.get("probability") else None
 
     for i in range(count):
         a, b = int(offsets[i]), int(offsets[i + 1])
         if b <= a:
             continue
-        comp_i, flow_i, status_i = _split_one(
-            parents[a:b],
-            presynapses[a:b],
-            postsynapses[a:b],
-            flow_thresh,
-            split_val,
-            int(somas[i]),
-            coords=None if coords is None else coords[a:b],
-        )
+        if propagate:
+            # Called only within this iteration, so `i` is this neuron's.
+            progress = report and (
+                lambda done: report(
+                    (i + done / max_iter) / count, f"neuron {i + 1} of {count}, step {done:,}"
+                )
+            )
+            comp_i, prob_i, status_i = _propagate_one(
+                parents[a:b],
+                presynapses[a:b],
+                postsynapses[a:b],
+                coords[a:b],
+                weighting,
+                alpha,
+                max_iter,
+                tol,
+                heal,
+                progress,
+            )
+            if probability is not None:
+                probability[a:b] = prob_i
+        else:
+            comp_i, flow_i, status_i = _split_one(
+                parents[a:b],
+                presynapses[a:b],
+                postsynapses[a:b],
+                flow_thresh,
+                split_val,
+                int(somas[i]),
+                coords=None if coords is None else coords[a:b],
+            )
+            if flow is not None:
+                flow[a:b] = flow_i
         compartment[a:b] = comp_i
         status[i] = status_i
-        if flow is not None:
-            flow[a:b] = flow_i
         if report is not None:
             report((i + 1) / count, f"neuron {i + 1} of {count}")
 
     # `flow` crosses only when asked for. It is the number the linker threshold was applied to —
     # navis's sum-mode flow with the branch-point correction, floored — and shipping it is four
-    # bytes times every node of every neuron in a Run, so a caller that does not draw it does not
-    # pay for it. Zero for a neuron that was not split.
+    # bytes times every node of every neuron in a Run, so a caller that does not draw it (Topology)
+    # does not pay for it. Split Axon/Dendrite always asks, to keep its memo independent of its
+    # `Write synapse flow` switch. Zero for a neuron that was not split.
     out = {
         "compartment": np.ascontiguousarray(compartment, dtype=np.int32),
         "status": np.ascontiguousarray(status, dtype=np.int32),
     }
     if flow is not None:
         out["flow"] = np.ascontiguousarray(flow, dtype=np.float32)
+    if probability is not None:
+        out["probability"] = np.ascontiguousarray(probability, dtype=np.float32)
     return out

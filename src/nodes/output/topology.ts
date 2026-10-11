@@ -70,7 +70,7 @@ import {
   topologyTable,
 } from '../lib/topologyOps'
 import {
-  readSplitSettings,
+  SPLIT_METHODS,
   sitesByNeuron,
   splitParams,
   splitSkeletons,
@@ -652,7 +652,7 @@ registerNode({
     const split = await splitSkeletons(
       skeletons,
       sitesByNeuron(points),
-      readSplitSettings(ctx.params),
+      SPLIT_METHODS.flow.read(ctx.params),
       {
         distances,
         signal: ctx.signal,

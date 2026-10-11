@@ -36,6 +36,7 @@ what a port's declaration means.
 - [Synapses Between: a connection's synapses, bound at both ends](nodes-morphology.md#synapses-between-a-connections-synapses-bound-at-both-ends)
 - [Synapses to Edges: connectivity counted where the synapses are](nodes-morphology.md#synapses-to-edges-connectivity-counted-where-the-synapses-are)
 - [Distance between: how far apart, and how much of one is near the other](nodes-morphology.md#distance-between-how-far-apart-and-how-much-of-one-is-near-the-other)
+- [Split Axon/Dendrite: four methods behind one `Method`](nodes-morphology.md#split-axondendrite-four-methods-behind-one-method)
 
 ## [nodes-connectivity.md](nodes-connectivity.md) — connectivity and networks
 

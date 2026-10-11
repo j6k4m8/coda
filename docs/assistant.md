@@ -341,6 +341,9 @@ same port is what fixed it, so a port with a `feeds` entry for one reading of a 
 the other reading too. The *"follow the request"* clause stayed on every line; it was never measured
 on its own, having shown nothing where it was tried.
 
+When a request and an option's label already use the same words, no note may be needed at all —
+measured for Split Axon/Dendrite's `Method` under *What is deliberately not built*.
+
 ### A plan that is legal and still wrong — the advisory round
 
 `applyPlan` checks types, ports, params and cycles. It cannot check meaning, and the case above is
@@ -555,6 +558,15 @@ app prompt since the split, both **unmeasured**: a corrected layout claim, and o
 node that was already appearing in every listing.
 
 ## What is deliberately not built
+
+**An enum's option labels were enough, and the planned note was not needed.** Split
+Axon/Dendrite's `Method` gained "by ROI" and "by tag", and the plan for them proposed a `feeds`-style
+note so a request phrased by region would reach the right option. Measured first, `gemma4:31b-cloud`
+at `lean` (`live.test.ts`, *splits by ROI when the request names…* and *splits by tag when…*):
+**10/10** chose "by ROI" for *their dendrites are the part inside LO(R)*, every time with `The ROIs
+hold` on "the dendrite" and ROI Meshes wired into `Volumes` and limited to LO(R); **5/5** chose "by
+tag" with the named tag in `Axon tags`. No note was added. The difference from `producedBy`'s case
+is that there the fact lived on another node; here the option and the request use the same words.
 
 **No tool loop.** It was the plan for the values half until the questions turned out to be
 aggregates. What is left for one is a single deep case — the full distinct list of a column the

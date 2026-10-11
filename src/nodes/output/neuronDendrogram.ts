@@ -38,7 +38,7 @@
 import { registerNode } from '../../core/registry'
 import { T, columnNames, isTabular, schemaOf } from '../../core/types'
 import type { PointsValue } from '../../core/values'
-import { EMPTY_BOUNDS, isTableValue, makeTable } from '../../core/values'
+import { emptyPoints, isTableValue } from '../../core/values'
 import { canFetchSynapseLinks, synapseUnitsOf } from '../../data/source'
 import { resolveSynapseUnit } from '../../data/synapseUnits'
 import { healSkeleton } from '../lib/arborHeal'
@@ -71,15 +71,7 @@ import { namesPartners, sitesFrom } from '../lib/topologyOps'
 const OWN_NEURON_COLUMNS = new Set(['neuronId', 'type', 'polarity', 'partnerType'])
 
 /** No point clicked: an empty cloud, with the synapse columns the port promises. */
-const EMPTY_POINTS: PointsValue = {
-  kind: 'points',
-  positions: new Float32Array(0),
-  attributes: makeTable(distalPointsSchema({ columns: [] }), {
-    distanceFromPoint: [],
-    distanceFromRoot: [],
-  }),
-  bounds: EMPTY_BOUNDS,
-}
+const EMPTY_POINTS: PointsValue = emptyPoints(distalPointsSchema({ columns: [] }))
 
 export const NEURON_DENDROGRAM = 'out.neuronDendrogram'
 

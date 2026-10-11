@@ -35,7 +35,14 @@ import type {
   SkeletonsValue,
   TableValue,
 } from '../../core/values'
-import { boundsOf, cableLength, makeTable, selectRows, tableFromRows } from '../../core/values'
+import {
+  SWC_SOMA,
+  boundsOf,
+  cableLength,
+  makeTable,
+  selectRows,
+  tableFromRows,
+} from '../../core/values'
 import { geometryFrame } from '../transforms/spaces'
 import { mapWithConcurrency } from '../concurrency'
 import {
@@ -212,7 +219,48 @@ function decodeCompactSkeleton(id: string, skeleton: CompactSkeleton): SkeletonG
     const parent = node[1]
     parents[i] = parent === null ? -1 : (position.get(parent) ?? -1)
   })
-  return { id, positions, radii, parents }
+  const tags = decodeTags(skeleton[2], position)
+  /*
+   * CATMAID's soma is a tag rather than a node type — `soma`, by the community's convention — so it
+   * becomes the source's own soma label, as neuPrint's `somaLocation` does (`withSomaAt`): every
+   * soma reader (the root a dendrogram, a split and Topology measure from) then finds it.
+   */
+  const somata = tags?.[SOMA_TAG]
+  let compartments: Uint8Array | undefined
+  if (somata) {
+    compartments = new Uint8Array(nodes.length)
+    for (const node of somata) compartments[node] = SWC_SOMA
+  }
+  return {
+    id,
+    positions,
+    radii,
+    parents,
+    ...(compartments ? { compartments } : {}),
+    ...(tags ? { tags } : {}),
+  }
+}
+
+/** The tag CATMAID tracers put on the soma. */
+const SOMA_TAG = 'soma'
+
+/**
+ * The response's node tags — tag name to node ids — as node indices. A node id the skeleton does
+ * not hold is dropped rather than kept as an index into nothing; a tag left with no node goes too.
+ */
+function decodeTags(
+  raw: CompactSkeleton[2] | undefined,
+  position: ReadonlyMap<number, number>,
+): Record<string, Int32Array> | undefined {
+  const tags: Record<string, Int32Array> = {}
+  for (const [name, ids] of Object.entries(raw ?? {})) {
+    const nodes = ids.flatMap((nodeId) => {
+      const at = position.get(nodeId)
+      return at === undefined ? [] : [at]
+    })
+    if (nodes.length > 0) tags[name] = Int32Array.from(nodes)
+  }
+  return Object.keys(tags).length > 0 ? tags : undefined
 }
 
 const EMPTY_LABELS: CatmaidLabels = {

@@ -47,6 +47,16 @@ SETTINGS = [
 ]
 
 
+def _rows(neuron):
+    """A neuron's node table in row order, node id to row, and parents as row numbers."""
+    nodes = neuron.nodes.reset_index(drop=True)
+    index = {int(v): i for i, v in enumerate(nodes.node_id.values)}
+    parents = np.array(
+        [index.get(int(p), -1) if p >= 0 else -1 for p in nodes.parent_id.values], dtype=np.int32
+    )
+    return nodes, index, parents
+
+
 def coda_split(neuron, flow_thresh=0.9, split_val=1.0):
     """Coda's answer for one navis neuron, in navis's own node order.
 
@@ -57,12 +67,7 @@ def coda_split(neuron, flow_thresh=0.9, split_val=1.0):
     `reroot_soma=True`). The neuron is deliberately *not* rerooted here, so the reroot checked is
     Coda's own.
     """
-    nodes = neuron.nodes.reset_index(drop=True)
-    index = {int(v): i for i, v in enumerate(nodes.node_id.values)}
-    parents = np.array(
-        [index.get(int(p), -1) if p >= 0 else -1 for p in nodes.parent_id.values],
-        dtype=np.int32,
-    )
+    nodes, index, parents = _rows(neuron)
 
     pre = np.zeros(len(nodes), dtype=np.uint32)
     post = np.zeros(len(nodes), dtype=np.uint32)
@@ -125,6 +130,63 @@ def compare(neuron, flow_thresh, split_val, split_arg):
     return 1
 
 
+# Label propagation's knobs, swept the same way: navis's defaults, then a set a user would move to.
+# `use_weights` here is navis's argument; the request spells it `weighting` (balance/count/none).
+PROP_SETTINGS = [
+    ("balance", "balance", 1.0),
+    (True, "count", 0.5),
+    (False, "none", 0.0),
+]
+
+
+def compare_prop(neuron, use_weights, weighting, alpha):
+    """Label propagation on one neuron against `navis.split_axon_dendrite_prop`; 1 on a failure.
+
+    The synapses are snapped to nodes the way navis does it — a KD-tree query on each connector's
+    position — so what is compared is the propagation itself rather than two snapping rules.
+    """
+    reference = navis.split_axon_dendrite_prop(
+        neuron.copy(), use_weights=use_weights, alpha=alpha, label_only=True
+    )
+    nodes, _, parents = _rows(neuron)
+    tree = navis.graph.neuron2KDTree(neuron)
+    pre = np.zeros(len(nodes), dtype=np.uint32)
+    post = np.zeros(len(nodes), dtype=np.uint32)
+    for column, counts in (("pre", pre), ("post", post)):
+        sites = getattr(neuron, f"{column}synapses")[["x", "y", "z"]].values
+        if len(sites):
+            np.add.at(counts, tree.query(sites)[1], 1)
+    coords = nodes[["x", "y", "z"]].values.astype(np.float32)
+    comp, prob, status = topology._propagate_one(
+        parents, pre, post, coords, weighting, alpha, 10_000, 1, False
+    )
+    ours = np.array([NAMES[int(c)] for c in comp])
+    theirs = (
+        reference.nodes.set_index("node_id")["compartment"]
+        .astype(str)
+        .replace("nan", "None")
+        .reindex(nodes.node_id.values)
+        .values
+    )
+    agree = int((ours == theirs).sum())
+    their_prob = (
+        reference.nodes.set_index("node_id")["compartment_prob"].reindex(nodes.node_id.values).values
+    )
+    both = (ours != "None") & (theirs != "None")
+    gap = float(np.nanmax(np.abs(np.nan_to_num(their_prob) - prob)[both], initial=0))
+    total = len(ours)
+    # Not exactly every node: where navis stops can turn on a score tied to the last bit, where
+    # scipy's compiled product and numpy differ by one ulp (`_propagate_one` says more). So every
+    # node labelled by both must agree, at most 0.1% may be labelled by one side only, and the
+    # probabilities must match where the two stopped together, every node agreeing.
+    labelled_differently = int(((ours != theirs) & both).sum())
+    ok = labelled_differently == 0 and agree >= 0.999 * total and (agree < total or gap < 1e-4)
+    print(f"neuron {neuron.id}: {total:6d} nodes  status={status}  "
+          f"{agree}/{total} = {agree / total:.4%}  largest probability gap {gap:.1e} "
+          f"{'✓' if ok else '✗'}")
+    return 0 if ok else 1
+
+
 def main():
     failures = 0
     neurons = navis.example_neurons(5)
@@ -134,9 +196,15 @@ def main():
             failures += compare(neuron, flow_thresh, split_val, split_arg)
         print()
 
+    for use_weights, weighting, alpha in PROP_SETTINGS:
+        print(f"== label propagation  use_weights={use_weights!r}  alpha={alpha} ==")
+        for neuron in neurons:
+            failures += compare_prop(neuron, use_weights, weighting, alpha)
+        print()
+
     if failures:
         sys.exit(f"{failures} neuron/setting pair(s) disagree with navis")
-    print("every neuron agrees with navis node for node, at both settings")
+    print("every neuron agrees with navis, at every setting")
 
 
 if __name__ == "__main__":

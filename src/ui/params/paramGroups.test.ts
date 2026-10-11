@@ -482,9 +482,41 @@ describe('which controls a generic surface draws', () => {
   })
 
   it('puts Split Axon/Dendrite’s controls on its rail, flow and the synapse toggle included', () => {
-    expect(railParams(requireNodeDef('neuron.splitCompartments'), {}).map((p) => p.id)).toEqual(
-      ['flowThresh', 'splitVal', 'heal', 'flow', 'showSynapses'],
-    )
+    const def = requireNodeDef('neuron.splitCompartments')
+    expect(railParams(def, {}).map((p) => p.id)).toEqual([
+      'method',
+      'flowThresh',
+      'splitVal',
+      'heal',
+      'flow',
+      'showSynapses',
+    ])
+    // Label propagation swaps flow's knobs, and flow's value switch, for its own.
+    expect(railParams(def, { method: 'propagation' }).map((p) => p.id)).toEqual([
+      'method',
+      'heal',
+      'weighting',
+      'alpha',
+      'maxIter',
+      'tol',
+      'probability',
+      'showSynapses',
+    ])
+    // A split by ROI tests each node on its own, so it has no heal and no per-node value.
+    expect(railParams(def, { method: 'roi' }).map((p) => p.id)).toEqual([
+      'method',
+      'inside',
+      'volumes',
+      'margin',
+      'showSynapses',
+    ])
+    expect(railParams(def, { method: 'tag' }).map((p) => p.id)).toEqual([
+      'method',
+      'heal',
+      'axonTags',
+      'dendriteTags',
+      'showSynapses',
+    ])
   })
 
   it('honours visibleIf, so a hidden control is not drawn somewhere else', () => {

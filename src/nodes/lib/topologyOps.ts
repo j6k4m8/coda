@@ -45,7 +45,8 @@ import type {
   SkeletonsValue,
   TableValue,
 } from '../../core/values'
-import type { SplitStatus } from '../../pyodide/topology'
+import type { SplitStatus } from './splitStatus'
+import { hasSplit } from './splitStatus'
 import {
   CODE_AXON,
   CODE_DENDRITE,
@@ -788,10 +789,14 @@ export interface CompartmentStats {
   readonly cableAxon: number
   readonly cableDendrite: number
   readonly cableLinker: number
-  readonly preAxon: number
-  readonly postAxon: number
-  readonly preDendrite: number
-  readonly postDendrite: number
+  /**
+   * Synapses per compartment; null where none were placed on the skeleton (a split by ROI or by tag
+   * with no Synapses wired), which is not counted rather than counted as none.
+   */
+  readonly preAxon: number | null
+  readonly postAxon: number | null
+  readonly preDendrite: number | null
+  readonly postDendrite: number | null
   /** `segregationIndex` over the axon and the dendrite; null where it is undefined. */
   readonly segregationIndex: number | null
 }
@@ -823,7 +828,7 @@ export function compartmentStats(
   status: SplitStatus,
   distances = parentDistances(skeleton),
 ): CompartmentStats {
-  if (!compartment || status !== 'ok') return { ...NO_SPLIT, status }
+  if (!compartment || !hasSplit(status)) return { ...NO_SPLIT, status }
   let cableAxon = 0
   let cableDendrite = 0
   let cableLinker = 0
@@ -835,28 +840,39 @@ export function compartmentStats(
     else if (code === CODE_LINKER) cableLinker += distances[i]!
   }
 
-  let preAxon = 0
-  let postAxon = 0
-  let preDendrite = 0
-  let postDendrite = 0
-  if (synapses) {
-    for (let i = 0; i < compartment.length; i++) {
-      const code = compartment[i]
-      if (code === CODE_AXON) {
-        preAxon += synapses.pre[i]!
-        postAxon += synapses.post[i]!
-      } else if (code === CODE_DENDRITE) {
-        preDendrite += synapses.pre[i]!
-        postDendrite += synapses.post[i]!
-      }
-    }
-  }
-
-  return {
+  const cable = {
     status,
     cableAxon: cableAxon / NM_PER_UM,
     cableDendrite: cableDendrite / NM_PER_UM,
     cableLinker: cableLinker / NM_PER_UM,
+  }
+  if (!synapses) {
+    return {
+      ...cable,
+      preAxon: null,
+      postAxon: null,
+      preDendrite: null,
+      postDendrite: null,
+      segregationIndex: null,
+    }
+  }
+  let preAxon = 0
+  let postAxon = 0
+  let preDendrite = 0
+  let postDendrite = 0
+  for (let i = 0; i < compartment.length; i++) {
+    const code = compartment[i]
+    if (code === CODE_AXON) {
+      preAxon += synapses.pre[i]!
+      postAxon += synapses.post[i]!
+    } else if (code === CODE_DENDRITE) {
+      preDendrite += synapses.pre[i]!
+      postDendrite += synapses.post[i]!
+    }
+  }
+
+  return {
+    ...cable,
     preAxon,
     postAxon,
     preDendrite,
@@ -963,7 +979,7 @@ export function splitColumnData(
    * group, applied one layer up.
    */
   const measured = (pick: (s: CompartmentStats) => number | null): ColumnData =>
-    stats.map((s) => (s.status === 'ok' ? pick(s) : null))
+    stats.map((s) => (hasSplit(s.status) ? pick(s) : null))
   return {
     splitStatus: stats.map((s) => s.status),
     cableAxon: measured((s) => s.cableAxon),

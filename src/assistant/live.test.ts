@@ -60,7 +60,7 @@ import type { ResultReader } from './digest'
 import { setKey, setModel, setProviderId } from '../data/ai/credentials'
 import { providerFor } from '../data/ai/registry'
 import type { CodaGraph } from '../core/graph'
-import { emptyGraph } from '../core/graph'
+import { edgeInto, emptyGraph } from '../core/graph'
 import { applyPlan } from './apply'
 import type { CatalogueDetail } from './catalogue'
 import { buildSystemPrompt } from './catalogue'
@@ -157,6 +157,16 @@ function datasetStart(): CodaGraph {
       },
     ],
   }
+}
+
+/** The first node of `type` in a graph. */
+function nodeOfType(graph: CodaGraph, type: string): CodaGraph['nodes'][number] | undefined {
+  return graph.nodes.find((n) => n.type === type)
+}
+
+/** The type of node `id`. */
+function typeOf(graph: CodaGraph, id: string): string | undefined {
+  return graph.nodes.find((n) => n.id === id)?.type
 }
 
 /** The value column of every Bar Chart in a graph, printed for counting across runs. */
@@ -347,11 +357,9 @@ describe.skipIf(!RUNNABLE)('against the real API', () => {
       )
       const { graph } = await ask(built, 'Label the dendrogram leaves with cell types.')
       console.log(`\n${describeGraph(graph)}\n`)
-      const dendro = graph.nodes.find((n) => n.type === 'out.dendrogram')
+      const dendro = nodeOfType(graph, 'out.dendrogram')
       expect(dendro).toBeDefined()
-      expect(
-        graph.edges.some((e) => e.target === dendro!.id && e.targetHandle === 'annotations'),
-      ).toBe(true)
+      expect(edgeInto(graph, dendro!.id, 'annotations')).toBeDefined()
     },
     PER_QUESTION_MS,
   )
@@ -434,7 +442,7 @@ describe.skipIf(!RUNNABLE)('against the real API', () => {
         'On the mini hemibrain, find the LC4 neurons and fetch their skeletons from the ' +
           'level-2 cache if that is available.',
       )
-      const skeletons = graph.nodes.find((n) => n.type === 'neuron.skeletons')
+      const skeletons = nodeOfType(graph, 'neuron.skeletons')
       expect(skeletons, 'a Skeletons node was added').toBeDefined()
 
       const chosen = String(skeletons!.params[SKELETON_SOURCE_PARAM] ?? '')
@@ -554,21 +562,73 @@ describe.skipIf(!RUNNABLE)('against the real API', () => {
           'each connection by the compartment at either end — axon or dendrite.',
       )
       console.log(`\n${describeGraph(graph)}\n`)
-      const typeOf = (id: string) => graph.nodes.find((n) => n.id === id)?.type
-      const into = (id: string, port: string) =>
-        graph.edges.find((e) => e.target === id && e.targetHandle === port)
-      const cc = graph.nodes.find((n) => n.type === 'connectome:connectionCompartments')
-      const feed = cc && into(cc.id, 'skeletons')
+      const cc = nodeOfType(graph, 'connectome:connectionCompartments')
+      const feed = cc && edgeInto(graph, cc.id, 'skeletons')
       const split =
-        feed && typeOf(feed.source) === 'neuron.splitCompartments' ? feed.source : ''
-      const skeletons = split ? into(split, 'skeletons') : undefined
-      const named = skeletons ? into(skeletons.source, 'neurons') : undefined
+        feed && typeOf(graph, feed.source) === 'neuron.splitCompartments' ? feed.source : ''
+      const skeletons = split ? edgeInto(graph, split, 'skeletons') : undefined
+      const named = skeletons ? edgeInto(graph, skeletons.source, 'neurons') : undefined
       console.log(
         `  COMPARTMENTS: node=${Boolean(cc)} split=${Boolean(split)} ` +
-          `skeletonsFor=${named ? `${typeOf(named.source)}:${named.sourceHandle}` : '-'}`,
+          `skeletonsFor=${named ? `${typeOf(graph, named.source)}:${named.sourceHandle}` : '-'}`,
       )
       expect(cc, 'a Connection Compartments node was added').toBeDefined()
       expect(split, 'its Skeletons come from Split Axon/Dendrite').not.toBe('')
+    },
+    PER_QUESTION_MS,
+  )
+
+  it(
+    'splits by ROI when the request names the region a compartment lies in',
+    async () => {
+      /*
+       * Split Axon/Dendrite's `Method` is an enum the catalogue lists by itself; the question is
+       * whether a request phrased by region reaches "by ROI" — with `Volumes` wired from ROI
+       * Meshes and `The ROIs hold` set to the compartment named — rather than the default
+       * synapse flow. Printed for counting over runs.
+       */
+      const { graph } = await ask(
+        datasetStart(),
+        'Find the LC4 neurons, fetch their skeletons and split them into axon and dendrite by ' +
+          'brain region: their dendrites are the part inside LO(R).',
+      )
+      console.log(`\n${describeGraph(graph)}\n`)
+      const split = nodeOfType(graph, 'neuron.splitCompartments')
+      const volumes = split && edgeInto(graph, split.id, 'volumes')
+      const from = volumes && typeOf(graph, volumes.source)
+      const fetched = nodeOfType(graph, 'neuron.roiMeshes')?.params['rois']
+      console.log(
+        `  SPLIT: node=${Boolean(split)} method=${String(split?.params['method'])} ` +
+          `inside=${String(split?.params['inside'])} volumes=${from ?? '-'} ` +
+          `rois=${JSON.stringify(split?.params['volumes'] ?? '')} ` +
+          `fetched=${JSON.stringify(fetched ?? '-')}`,
+      )
+      expect(split, 'a Split Axon/Dendrite node was added').toBeDefined()
+      expect(split!.params['method'], 'split by ROI').toBe('roi')
+      expect(from, 'its Volumes come from ROI Meshes').toBe('neuron.roiMeshes')
+    },
+    PER_QUESTION_MS,
+  )
+
+  it(
+    'splits by tag when the request names the node tags that mark a compartment',
+    async () => {
+      // The tag method's counterpart of the case above: the tag names land in `Axon tags`.
+      const { graph } = await ask(
+        datasetStart(),
+        'Find the LC4 neurons, fetch their skeletons and split them into axon and dendrite ' +
+          'using the "axon start" node tags our tracers placed where each axon begins.',
+      )
+      console.log(`\n${describeGraph(graph)}\n`)
+      const split = nodeOfType(graph, 'neuron.splitCompartments')
+      console.log(
+        `  TAGSPLIT: node=${Boolean(split)} method=${String(split?.params['method'])} ` +
+          `axonTags=${JSON.stringify(split?.params['axonTags'] ?? '')} ` +
+          `dendriteTags=${JSON.stringify(split?.params['dendriteTags'] ?? '')}`,
+      )
+      expect(split, 'a Split Axon/Dendrite node was added').toBeDefined()
+      expect(split!.params['method'], 'split by tag').toBe('tag')
+      expect(String(split!.params['axonTags']), 'the tag named').toContain('axon start')
     },
     PER_QUESTION_MS,
   )

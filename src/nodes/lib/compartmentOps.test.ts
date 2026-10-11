@@ -23,9 +23,12 @@ import {
   sitesByNeuron,
   splitSkeletons,
   splitSummarySchema,
+  splitStats,
   splitSummaryTable,
+  splitWarning,
   withSplit,
 } from './compartmentOps'
+import { splitColumnData } from './topologyOps'
 
 vi.mock('../../pyodide/topology', async (importOriginal) => ({
   ...(await importOriginal<typeof TopologyBridge>()),
@@ -88,7 +91,7 @@ function echo(request: SplitCompartmentsRequest) {
   })
 }
 
-const SETTINGS = { flowThresh: 0.9, splitVal: 1, heal: false }
+const SETTINGS = { method: 'flow' as const, flowThresh: 0.9, splitVal: 1, heal: false }
 
 beforeEach(() => {
   mockedRun.mockReset()
@@ -204,11 +207,80 @@ function answer(status: number[]) {
 
 describe('readSplitSettings', () => {
   it('reads the three controls, heal only when it is exactly true', () => {
+    // Topology declares no `method`, and reads as flow.
     expect(readSplitSettings({ flowThresh: 0.8, splitVal: 1.2, heal: 'yes' })).toEqual({
+      method: 'flow',
       flowThresh: 0.8,
       splitVal: 1.2,
       heal: false,
     })
+  })
+
+  it('carries only the chosen method’s knobs, so each keys its split on what it reads', () => {
+    expect(
+      readSplitSettings({
+        flowThresh: 0.9,
+        splitVal: 1,
+        method: 'propagation',
+        weighting: 'count',
+        alpha: 0.5,
+        maxIter: 200,
+        tol: 1,
+      }),
+    ).toEqual({
+      heal: false,
+      method: 'propagation',
+      weighting: 'count',
+      alpha: 0.5,
+      maxIter: 200,
+      tol: 1,
+    })
+  })
+})
+
+describe('label propagation', () => {
+  const PROPAGATION = {
+    heal: false,
+    method: 'propagation' as const,
+    weighting: 'count' as const,
+    alpha: 1,
+    maxIter: 100,
+    tol: 1,
+  }
+
+  it('sends its knobs and the positions its edge lengths need, and scatters the probability back', async () => {
+    mockedRun.mockImplementation((request) =>
+      echo(request).then((r) => ({
+        ...r,
+        probability: Float32Array.from([0.5, 0.75, 1, 0.875, 0.625]),
+      })),
+    )
+    const split = await splitSkeletons(skeletons(), new Map(), PROPAGATION, {
+      values: true,
+    })
+    const sent = mockedRun.mock.calls[0]![0]
+    expect(sent).toMatchObject({ method: 'propagation', weighting: 'count', probability: true })
+    expect(sent.points.length).toBe(15)
+    expect(split.values!.name).toBe('axonProbability')
+    expect(split.values!.perItem.map((p) => [...p!])).toEqual([
+      [0.5, 0.75, 1],
+      [0.875, 0.625],
+    ])
+  })
+
+  it('keeps the labels of a neuron that did not converge, and says so', async () => {
+    mockedRun.mockImplementation(answer([3, 0]))
+    const split = await splitSkeletons(skeletons(), new Map(), PROPAGATION)
+    expect(split.status).toEqual(['not converged', 'ok'])
+    const out = withSplit(skeletons(), split)
+    expect(out.items[0]!.split).toBeDefined()
+    // And Summary measures it, rather than writing it a row of nulls beside its labels.
+    const summary = splitColumnData(splitStats(skeletons(), split))
+    expect(summary['splitStatus']![0]).toBe('not converged')
+    expect(summary['cableAxon']![0]).not.toBeNull()
+    expect(splitWarning(split.status, { column: 'Summary' })).toMatch(
+      /did not converge for 1 of 2 neurons.*Max iterations/,
+    )
   })
 })
 
@@ -301,13 +373,14 @@ describe('synapse flow on the skeletons', () => {
     mockedRun.mockImplementation(withFlow([0, 2]))
     const plain = await splitSkeletons(skeletons(), new Map(), SETTINGS)
     expect(mockedRun.mock.calls[0]![0].flow).toBeFalsy()
-    expect(plain.flow).toBeUndefined()
+    expect(plain.values).toBeUndefined()
 
-    const split = await splitSkeletons(skeletons(), new Map(), SETTINGS, { flow: true })
+    const split = await splitSkeletons(skeletons(), new Map(), SETTINGS, { values: true })
     expect(mockedRun.mock.calls[1]![0].flow).toBe(true)
-    expect([...split.flow![0]!]).toEqual([0, 0.5, 1])
+    expect(split.values!.name).toBe('flow')
+    expect([...split.values!.perItem[0]!]).toEqual([0, 0.5, 1])
     // No peak is no answer, not a neuron that carries no flow.
-    expect(split.flow![1]).toBeUndefined()
+    expect(split.values!.perItem[1]).toBeUndefined()
   })
 
   it('stores it as a node value where the split worked, replacing a stale one and keeping others', async () => {
@@ -321,7 +394,7 @@ describe('synapse flow on the skeletons', () => {
         { ...input.items[1]!, nodeValues: { flow: new Float32Array(2) } },
       ],
     }
-    const split = await splitSkeletons(carried, new Map(), SETTINGS, { flow: true })
+    const split = await splitSkeletons(carried, new Map(), SETTINGS, { values: true })
     const out = withSplit(carried, split)
 
     expect([...out.items[0]!.nodeValues!['flow']!]).toEqual([0, 0.5, 1])

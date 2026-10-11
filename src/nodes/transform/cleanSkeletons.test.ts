@@ -221,6 +221,35 @@ describe('cleanOps — the scattering', () => {
     ).toThrow(/no longer line up/)
   })
 
+  it('re-snaps each tag to the nearest cleaned node rather than dropping it', () => {
+    // The first neuron downsampled to its two ends: the tag on the middle node (1,000 nm) lands on
+    // the nearer of them, and two tagged nodes landing on one node are one.
+    const value = skeletonsFixture()
+    const tagged = {
+      ...value,
+      items: [
+        {
+          ...value.items[0]!,
+          tags: { axon: Int32Array.from([1, 2]), soma: Int32Array.from([0]) },
+        },
+        ...value.items.slice(1),
+      ],
+    }
+    const result = passThrough(cleanRequestFrom(tagged, OFF))
+    const ends = {
+      ...result,
+      points: Float32Array.from([0, 0, 0, 1800, 0, 0, 5000, 0, 0, 6000, 0, 0]),
+      parents: Int32Array.from([-1, 0, -1, 0]),
+      radii: new Float32Array(4),
+      compartments: new Uint8Array(4),
+      offsets: Int32Array.from([0, 2, 4, 4]),
+    }
+    const out = skeletonsFromResult(tagged, ends)
+    expect(Array.from(out.items[0]!.tags!['axon']!)).toEqual([1])
+    expect(Array.from(out.items[0]!.tags!['soma']!)).toEqual([0])
+    expect(out.items[1]!.tags).toBeUndefined()
+  })
+
   it('counts the neurons that came back empty', () => {
     expect(emptiedItems(Int32Array.from([0, 3, 5, 5]))).toBe(1)
     expect(emptiedItems(Int32Array.from([0, 3, 5, 7]))).toBe(0)

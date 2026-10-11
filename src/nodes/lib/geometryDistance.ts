@@ -1026,7 +1026,7 @@ export function mixedQuantityRefusal(shape: DistanceShape): string | undefined {
  * a graphene body can carry ten times that — so this stays an under-estimate for a
  * full-resolution scene, which the node's own 5-minute threshold is far enough out to absorb.
  */
-const SEARCHES_PER_SECOND: Record<
+export const SEARCHES_PER_SECOND: Record<
   DistanceCollection['kind'],
   { exhaustive: number; bounded: number }
 > = {

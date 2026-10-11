@@ -294,8 +294,9 @@ export interface SkeletonGeometry {
    * dendrite, 0 for a point the source left unlabelled. The vocabulary every source that labels
    * compartments already speaks: CAVE's skeleton service and every SWC file.
    *
-   * **Absent means the source publishes no labels**, which is most of them — neuPrint, CATMAID and
-   * level-2 skeletons carry none. Never inferred here: a split computed from synapses is a
+   * **Absent means the source publishes no labels**, which is most of them — level-2 skeletons
+   * carry none, and neuPrint and CATMAID label only the soma, from `somaLocation` and from the
+   * `soma` node tag respectively. Never inferred here: a split computed from synapses is a
    * *result* (`out.topology`), and one written into the geometry would be indistinguishable from
    * one the source measured. Where present it is exactly as long as `radii`.
    */
@@ -325,6 +326,18 @@ export interface SkeletonGeometry {
    * a transform that only moves the nodes, dropped by one that renumbers them.
    */
   readonly nodeValues?: Readonly<Record<string, Float32Array>>
+  /**
+   * Node tags, by name: the nodes each one is on — CATMAID's free-text tags (`soma`, `axon`,
+   * `ends`, …), which a tracer places by hand.
+   *
+   * **Absent means the source publishes none**, which is every source but CATMAID. Unlike `split`
+   * these are the source's, and what a tag marks is a point on the cable, so a transform that only
+   * moves nodes keeps them as they are and one that renumbers them (Clean Skeletons,
+   * `cleanOps.snappedTags`) re-snaps each to the nearest new node rather than dropping them — the
+   * rule hand corrections follow. A new renumbering transform must do the same: spreading the item
+   * would carry indices that now name other nodes, with nothing to say so.
+   */
+  readonly tags?: Readonly<Record<string, Int32Array>>
 }
 
 /**
@@ -359,6 +372,11 @@ export const NODE_VALUES = [
     label: 'synapse flow (fraction of peak)',
     /** Where the value comes from — so a picker can say it without naming nodes itself. */
     source: 'Split Axon/Dendrite, with Write synapse flow on',
+  },
+  {
+    value: 'axonProbability',
+    label: 'compartment probability (label propagation)',
+    source: 'Split Axon/Dendrite by label propagation, with Write probability on',
   },
 ] as const satisfies readonly { value: string; label: string; source: string }[]
 
@@ -439,6 +457,7 @@ export function skeletonBuffers(s: Omit<SkeletonGeometry, 'id'>): ArrayBufferVie
   if (s.compartments) buffers.push(s.compartments)
   if (s.split) buffers.push(s.split)
   if (s.nodeValues) buffers.push(...Object.values(s.nodeValues))
+  if (s.tags) buffers.push(...Object.values(s.tags))
   return buffers
 }
 
@@ -824,6 +843,16 @@ export function emptyTable(
   const data: Record<string, ColumnData> = {}
   for (const col of schema.columns) data[col.name] = []
   return makeTable(schema, data, kind)
+}
+
+/** A cloud of no points with `schema`'s columns — what a points port says when there is nothing. */
+export function emptyPoints(schema: TableSchema): PointsValue {
+  return {
+    kind: 'points',
+    positions: new Float32Array(0),
+    attributes: emptyTable(schema),
+    bounds: EMPTY_BOUNDS,
+  }
 }
 
 export function makeMatrix(

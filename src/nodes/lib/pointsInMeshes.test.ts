@@ -261,7 +261,7 @@ describe('the ray', () => {
    * and 3 in one each, and point 4 in none.
    */
   it('counts only the rays the bounding boxes let through', async () => {
-    expect(countRays(cloud(), volumeBoxes(volumes().items).candidateCount)).toBe(4)
+    expect(countRays(cloud().positions, volumeBoxes(volumes().items).candidateCount)).toBe(4)
   })
 })
 

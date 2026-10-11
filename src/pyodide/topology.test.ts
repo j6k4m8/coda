@@ -16,7 +16,13 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { CODE_AXON, CODE_DENDRITE, CODE_LINKER, CODE_UNASSIGNED } from '../core/values'
-import { SPLIT_MULTIPLE_ROOTS, SPLIT_NO_SYNAPSES, SPLIT_OK } from './topology'
+import {
+  SPLIT_MULTIPLE_ROOTS,
+  SPLIT_NOT_CONVERGED,
+  SPLIT_NO_SYNAPSES,
+  SPLIT_OK,
+  splitStatusOf,
+} from './topology'
 
 const SOURCE = readFileSync(fileURLToPath(new URL('./topology.py', import.meta.url)), 'utf8')
 
@@ -41,8 +47,18 @@ describe('the compartment vocabulary', () => {
     ['OK', SPLIT_OK],
     ['MULTIPLE_ROOTS', SPLIT_MULTIPLE_ROOTS],
     ['NO_SYNAPSES', SPLIT_NO_SYNAPSES],
+    ['NOT_CONVERGED', SPLIT_NOT_CONVERGED],
   ])('status %s means the same number on both sides', (name, ours) => {
     expect(pythonConstant(name)).toBe(ours)
+  })
+
+  it('reads every status code back as its word', () => {
+    expect([0, 1, 2, 3].map(splitStatusOf)).toEqual([
+      'ok',
+      'multiple roots',
+      'no synapses',
+      'not converged',
+    ])
   })
 
   it('keeps the four codes distinct', () => {
@@ -111,6 +127,23 @@ describe('the navis defaults topology.py pins', () => {
     expect(heal).toBeLessThan(refuse)
     // No distance cap: a cap leaves a forest, and a forest is still refused.
     expect(SOURCE).toMatch(/method="ALL",\s*max_dist=None/)
+  })
+
+  it('sums a row the way scipy does, which is what decides where the propagation stops', () => {
+    /*
+     * navis stops once the hard labels have held for two steps, and a front reaching unreached
+     * nodes changes none, so the stop turns on the last bit of a score. Summed element by element
+     * the row totals differed from scipy's in the last bit and the port stopped two iterations
+     * early, leaving two nodes unlabelled; `pnpm probe:split` is where that was measured.
+     */
+    expect(SOURCE).toContain('row_sum[has_edges] = np.add.reduceat(weight_edge, starts)')
+    expect(SOURCE).toContain('order = np.lexsort((cols, rows))')
+  })
+
+  it('keeps the labels of a propagation that hit its cap, as navis does', () => {
+    expect(SOURCE).toContain(
+      'return compartment, probability, OK if converged else NOT_CONVERGED',
+    )
   })
 
   it("unpacks geodesic_nearest in fastcore's order, not navis's wrapper's", () => {

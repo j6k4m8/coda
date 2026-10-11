@@ -137,6 +137,20 @@ export function splitArbor(skeleton: SkeletonGeometry, root?: number): Arbor {
   return arbor
 }
 
+/**
+ * `node` and everything distal of it labelled `code` — what "distal" means for a correction and for
+ * a split by tag alike. A subtree is one contiguous run of the pre-order, `tin`/`tout`'s whole
+ * purpose. A node the walk never reached is left alone.
+ */
+export function fillDistal(arbor: Arbor, node: number, code: number, out: Uint8Array): void {
+  const from = arbor.tin[node]!
+  if (from >= 0) fillRun(arbor, from, arbor.tout[node]!, code, out)
+}
+
+function fillRun(arbor: Arbor, from: number, to: number, code: number, out: Uint8Array): void {
+  for (let k = from; k < to; k++) out[arbor.order[k]!] = code
+}
+
 /** The nearest node to a point within `SNAP_NM`, or -1. */
 export function snapToNode(skeleton: SkeletonGeometry, at: readonly number[]): number {
   return nearestNode(skeleton.positions, at, SNAP_NM)
@@ -168,15 +182,11 @@ export function applyCorrections(
     if (from < 0) continue
     const to = arbor.tout[node]!
     const code = CODE[correction.to]
-    // The subtree is one contiguous run of the pre-order — `tin`/`tout`'s whole purpose — so
-    // "everything else" is the two runs either side of it.
-    const set = (a: number, b: number) => {
-      for (let k = a; k < b; k++) out[arbor.order[k]!] = code
-    }
-    if (correction.scope === 'distal') set(from, to)
+    if (correction.scope === 'distal') fillDistal(arbor, node, code, out)
     else {
-      set(0, from)
-      set(to, arbor.order.length)
+      // "Everything else" is the two runs of the pre-order either side of the subtree.
+      fillRun(arbor, 0, from, code, out)
+      fillRun(arbor, to, arbor.order.length, code, out)
     }
     applied++
   }

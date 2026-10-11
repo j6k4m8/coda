@@ -1665,3 +1665,48 @@ depend on. Without it `trimesh` scans every triangle for every point, measured a
 second** on a 71,424-face neuron — one pair would be five minutes — so the helper raises with the
 `pip install` named rather than running it. R stops at meshes outright: `Rvcg::vcgClostKD` is only
 suggested by nat, and `neuron.meshes` is already a TODO there, so a mesh never reaches the port.
+
+## Split Axon/Dendrite: four methods behind one `Method`
+
+Synapse flow (navis's `split_axon_dendrite`), label propagation (`split_axon_dendrite_prop`), by ROI
+and by tag. The design history and the user's decisions are in
+[split-methods-plan.md](split-methods-plan.md); what follows is what the code relies on.
+
+**One table, `SPLIT_METHODS` (`compartmentOps.ts`), keyed over the method.** Each entry says what
+it needs (synapses, volumes, a tree walk — the last decides whether `Heal` is shown), the per-node
+value it can write, and **reads its own settings**: a method's knobs and no other's, so the cached
+split is keyed on what that method reads and switching away and back finds it. A method missing
+from the table, its reader included, is a compile error. Topology has no `Method` and reads
+`SPLIT_METHODS.flow.read`. The two synapse methods go to Python through `splitSkeletons`; by ROI
+(`splitByVolume.ts`) and by tag (`splitByTag.ts`) run in TypeScript. Both ports are optional, so
+`validate` says per method which one is missing.
+
+**Label propagation is a port of navis, checked against it** (`pnpm probe:split`). Two things the
+port has to reproduce exactly, because the stop rule turns on the last bit of a score: the
+adjacency in scipy's CSR order, and row sums by `np.add.reduceat`. Summed element by element, the
+port stopped two iterations early and left nodes unlabelled. **`Clamping` defaults to 0.5, not
+navis's 1**: unclamped, a tree's scores can flip between two states for ever (a nine-node Y never
+converges at 1). A neuron that hits `Max iterations` **keeps its labels** with status `not
+converged`, as navis does; `hasSplit` (`splitStatus.ts`) counts it as split and `splitWarning` says
+so. The per-node value is always asked of Python and dropped after the memo when its switch is off,
+so ticking `Write probability` does not re-run the split.
+
+**By ROI is Points in Volumes' inside test**, a ray per node per candidate volume, plus a `Margin`:
+a node outside every volume but within that distance of a surface counts as inside, through
+Distance between's early-exit `hasWithin`, asked only inside each box grown by the margin and only
+after every ray (regions nest). The rays answer a **mask**; `The ROIs hold` only relabels it, so
+flipping it casts nothing. The cost is counted before anything is cast and priced against
+`RAY_WARN` by `warnRayWork`, searches at Distance between's measured rate. Without a synapse cloud
+the per-compartment counts are **null, not zero**, and the `Synapses` output is an empty cloud.
+
+**By tag applies a tag the way a hand correction is applied** (`fillDistal`, the same soma-rooted
+arbour), but never *as* a correction: corrections are anchored by position and snapped, and a tag
+already names its node. Tags in pre-order, so a nested tag wins; the rest is dendrite, axon or —
+both kinds named — linker. A forest is `multiple roots`, as flow refuses it; a neuron carrying none
+of the named tags is `no tags`.
+
+**Tags live on the geometry** (`SkeletonGeometry.tags`), decoded from CATMAID's `compact-detail`,
+whose `soma` tag also becomes the soma label (`compartments`), as neuPrint's `somaLocation` does.
+Unlike `split` they survive renumbering: Clean Skeletons re-snaps each tagged node to the nearest
+cleaned one (`snappedTags`). **A new transform that renumbers nodes must do the same** — spreading
+the item carries indices that now name other nodes, with nothing to say so.

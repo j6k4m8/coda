@@ -13,8 +13,9 @@ import type { EvalContext, ParamValues } from '../../core/node'
 import { defaultParams, makeInferContext } from '../../core/node'
 import { requireNodeDef } from '../../core/registry'
 import { T, column, tableSchema } from '../../core/types'
-import type { PointsValue, SkeletonsValue, Value } from '../../core/values'
-import { isPointsValue, isSkeletonsValue, isTableValue } from '../../core/values'
+import type { MeshesValue, PointsValue, SkeletonsValue, Value } from '../../core/values'
+import { isPointsValue, isSkeletonsValue, isTableValue, makeTable } from '../../core/values'
+import { cube } from '../lib/__fixtures__/cube'
 import { MockSource } from '../../data/mock/MockSource'
 import { getConnectome } from '../../data/mock/generate'
 import type * as TopologyBridge from '../../pyodide/topology'
@@ -173,6 +174,135 @@ describe('neuron.splitCompartments', () => {
     if (!isTableValue(summary)) throw new Error('expected a table')
     expect(summary.data['corrections']).toEqual([1, 0])
     expect(warnings.join(' ')).toMatch(/1 of 2 hand corrections no longer land/)
+  })
+
+  it('splits by label propagation when asked, writing the probability as a node value', async () => {
+    mockedRun.mockImplementation((request) =>
+      fakeSplit(request).then((r) => ({
+        ...r,
+        probability: new Float32Array(request.parents.length).fill(0.75),
+      })),
+    )
+    const { skeletons, synapses } = await inputs()
+    const { outputs } = await run(
+      { skeletons, synapses },
+      { method: 'propagation', probability: true, flow: true },
+    )
+    const sent = mockedRun.mock.calls.at(-1)![0]
+    // The flow switch belongs to the other method and is not what gets asked for here.
+    expect(sent).toMatchObject({ method: 'propagation', probability: true, flow: false })
+    const item = (outputs['out'] as SkeletonsValue).items[0]!
+    expect(item.split).toBeDefined()
+    expect(item.nodeValues?.['axonProbability']?.[0]).toBe(0.75)
+    expect(item.nodeValues?.['flow']).toBeUndefined()
+  })
+
+  describe('by tag', () => {
+    /** The first neuron with an axon tag on its node `at`, the way CATMAID delivers one. */
+    async function taggedInputs(at: number) {
+      const { skeletons, synapses } = await inputs()
+      const [first, ...rest] = skeletons.items
+      const items = [{ ...first!, tags: { axon: Int32Array.from([at]) } }, ...rest]
+      return { skeletons: { ...skeletons, items }, synapses }
+    }
+
+    it('labels distal of the tag axon and the rest dendrite, without synapses', async () => {
+      const { skeletons } = await taggedInputs(5)
+      const { outputs, warnings } = await run(
+        { skeletons },
+        { method: 'tag', axonTags: 'axon' },
+      )
+      const [first, second] = (outputs['out'] as SkeletonsValue).items
+      expect(first!.split![5]).toBe(2)
+      expect(first!.split!.some((code) => code === 1)).toBe(true)
+      // The second neuron carries no tag: no split, and the card says why.
+      expect(second!.split).toBeUndefined()
+      expect(warnings.join(' ')).toMatch(/carry none of the named tags/)
+      const summary = outputs['summary']
+      if (!isTableValue(summary)) throw new Error('expected a table')
+      expect(summary.data['splitStatus']).toEqual(['ok', 'no tags'])
+      expect(mockedRun).not.toHaveBeenCalled()
+    })
+
+    it('names the tags the skeletons do carry when the ones asked for match nothing', async () => {
+      const { skeletons } = await taggedInputs(5)
+      const { warnings } = await run({ skeletons }, { method: 'tag', axonTags: 'Axon' })
+      expect(warnings.join(' ')).toMatch(/carries `Axon`\. The tags they carry: `axon`/)
+    })
+
+    it('asks for a tag name before anything runs', () => {
+      const ctx = makeInferContext(DEF, { method: 'tag' }, { skeletons: T.skeletons() })
+      expect(DEF.validate!(ctx).join(' ')).toMatch(/Name the node tags/)
+    })
+  })
+
+  describe('by ROI', () => {
+    /** A cube around the first neuron's first node, as ROI Meshes would hand over a region. */
+    function volumesAround(skeletons: SkeletonsValue): MeshesValue {
+      const p = skeletons.items[0]!.positions
+      const items = [cube('ME(R)', [p[0]!, p[1]!, p[2]!], 2000)]
+      return {
+        kind: 'meshes',
+        items,
+        attributes: makeTable(tableSchema(column('neuronId', 'str')), { neuronId: ['ME(R)'] }),
+        bounds: skeletons.bounds,
+        units: 'nm',
+      }
+    }
+
+    it('splits without synapses, counting none rather than zero and labelling an empty cloud', async () => {
+      const { skeletons } = await inputs()
+      const volumes = volumesAround(skeletons)
+      const { outputs } = await run({ skeletons, volumes }, { method: 'roi', inside: 'axon' })
+      const first = (outputs['out'] as SkeletonsValue).items[0]!
+      expect(first.split![0]).toBe(2)
+      expect(first.split!.some((code) => code === 1)).toBe(true)
+      const labelled = outputs['labelled'] as PointsValue
+      expect(labelled.attributes.length).toBe(0)
+      expect(labelled.attributes.schema.columns.map((c) => c.name)).toEqual(['compartment'])
+      const summary = outputs['summary']
+      if (!isTableValue(summary)) throw new Error('expected a table')
+      expect(summary.data['cableAxon']![0]).toBeGreaterThan(0)
+      expect(summary.data['preAxon']![0]).toBeNull()
+      // Python is never asked: the regions are tested here.
+      expect(mockedRun).not.toHaveBeenCalled()
+
+      // The ROIs holding the dendrite instead is the same nodes, relabelled.
+      const flipped = await run({ skeletons, volumes }, { method: 'roi', inside: 'dendrite' })
+      const again = (flipped.outputs['out'] as SkeletonsValue).items[0]!.split!
+      expect([...again]).toEqual([...first.split!].map((code) => (code === 2 ? 1 : 2)))
+    })
+
+    it('counts nodes within the margin, in µm, as inside', async () => {
+      const { skeletons } = await inputs()
+      const volumes = volumesAround(skeletons)
+      const axonNodes = async (margin: number) => {
+        const { outputs } = await run({ skeletons, volumes }, { method: 'roi', margin })
+        const split = (outputs['out'] as SkeletonsValue).items[0]!.split!
+        return split.filter((code) => code === 2).length
+      }
+      const none = await axonNodes(0)
+      // Two micrometres is two thousand nanometres: far more of the arbour than a cube 4 µm across.
+      expect(await axonNodes(2)).toBeGreaterThan(none)
+    })
+
+    it('says which named ROIs are not wired, and refuses when none of them is', async () => {
+      const { skeletons } = await inputs()
+      const volumes = volumesAround(skeletons)
+      const { warnings } = await run(
+        { skeletons, volumes },
+        { method: 'roi', volumes: 'ME(R), LOP(R)' },
+      )
+      expect(warnings.join(' ')).toMatch(/not among the wired volumes: `LOP\(R\)`/)
+      await expect(
+        run({ skeletons, volumes }, { method: 'roi', volumes: 'LOP(R)' }),
+      ).rejects.toThrow(/None of the ROIs named/)
+    })
+
+    it('asks for volumes, not synapses', async () => {
+      const { skeletons } = await inputs()
+      await expect(run({ skeletons }, { method: 'roi' })).rejects.toThrow(/`Volumes`/)
+    })
   })
 
   it('applies a correction across the pieces of a neuron healed to be split', async () => {

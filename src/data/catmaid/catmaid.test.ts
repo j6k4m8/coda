@@ -23,6 +23,7 @@ import volumesFixture from './__fixtures__/volumes.json'
 import { resetCache } from '../cache'
 import { SYNAPSE_UNITS } from '../synapseUnits'
 import { resetIndexLoads } from '../neuronIndex'
+import { SWC_SOMA } from '../../core/values'
 import { CatmaidSource } from './CatmaidSource'
 import type { AnnotationListResponse } from './api'
 import { synapseWeight } from './api'
@@ -445,6 +446,24 @@ describe('skeletons', () => {
     // consumer that walks the array once — the SWC writer included.
     expect([...item.parents].filter((parent) => parent === -1)).toHaveLength(1)
     for (const parent of item.parents) expect(parent).toBeLessThan(points)
+  })
+
+  it('keeps the node tags, as node indices', async () => {
+    stubFetch(defaultRoutes)
+    const skeletons = await source().fetchSkeletons({ datasetId: '1', neuronIds: ['16'] })
+    const item = skeletons.items[0]!
+    const raw = compactDetailFixture.skeleton
+    // The fixture tags its root `soma`, and four nodes `missed branch?`: text, spaces and all.
+    const rootIndex = [...item.parents].indexOf(-1)
+    expect(Array.from(item.tags!['soma']!)).toEqual([rootIndex])
+    expect(item.tags!['missed branch?']).toHaveLength(4)
+    const nodeIds = (raw[0] as number[][]).map((node) => node[0])
+    for (const index of item.tags!['missed branch?']!) {
+      expect(raw[2]['missed branch?']).toContain(nodeIds[index])
+    }
+    // The `soma` tag is the source's soma, so the root a split measures from is found there.
+    expect(item.compartments![rootIndex]).toBe(SWC_SOMA)
+    expect(item.compartments!.filter((code) => code !== 0)).toHaveLength(1)
   })
 
   it('declares nanometres, so NBLAST does not refuse it', async () => {

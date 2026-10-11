@@ -115,7 +115,7 @@ export const CHANGELOG: readonly ChangelogEntry[] = [
     date: '2026-10-11',
     title: 'Connections by compartment',
     summary:
-      'The new Connection Compartments node counts each connection’s synapses by where they sit at either end: axo-dendritic, axo-axonic, dendro-dendritic and so on.',
+      'The new Connection Compartments node counts each connection’s synapses by where they sit at either end: axo-dendritic, axo-axonic, dendro-dendritic and so on. Split Axon/Dendrite gains three more ways to split.',
     highlight: true,
     features: [
       {
@@ -126,6 +126,22 @@ export const CHANGELOG: readonly ChangelogEntry[] = [
           '**Connection Compartments** takes an edge list, for example from Connectivity, and skeletons split by **Split Axon/Dendrite**. It fetches every synapse behind each edge and looks up the compartment at both ends: the presynaptic site on the presynaptic neuron’s split, the postsynaptic site on the postsynaptic one’s. Each edge then gets its synapses counted as axo-dendritic, axo-axonic, dendro-dendritic, dendro-axonic, linker or unsplit, either as a column per class or as a row per class.\n\n' +
           'The **Synapses** output carries every synapse with its two compartments, so a 3D View coloured by `connection` shows where on the arbour each kind sits. Fetch the skeletons for Connectivity’s **Neuron Set**, so that the neurons at both ends of every edge are split.',
         demo: 'connectome:connectionCompartments',
+      },
+      {
+        kind: 'node',
+        date: '2026-10-11',
+        title: 'Split Axon/Dendrite: label propagation, by ROI and by tag',
+        body:
+          '**Split Axon/Dendrite** has a **Method** control. Besides synapse flow there is **label propagation**, navis’s `split_axon_dendrite_prop`, which spreads labels out from where a neuron’s outputs and inputs sit and can write each node’s probability of being axon. **By ROI** labels the nodes inside the regions you wire into the new **Volumes** input as axon, or as dendrite, and the rest as the other; a **Margin** also counts nodes just outside a region. **By tag** reads the node tags CATMAID tracers place where the axon or the dendrite starts.\n\n' +
+          'By ROI and by tag do not need synapses. Hand corrections apply to every method.',
+      },
+    ],
+    items: [
+      {
+        kind: 'data',
+        date: '2026-10-11',
+        title: 'CATMAID skeletons keep their node tags.',
+        body: 'Tags such as `soma`, `axon` or `ends` now come with each skeleton, and **Clean Skeletons** moves each one to the nearest node it keeps. A node tagged `soma` is the skeleton’s soma, so dendrograms, Topology and Split Axon/Dendrite measure from there.',
       },
     ],
   },

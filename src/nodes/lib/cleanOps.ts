@@ -50,6 +50,7 @@ import type {
 } from '../../pyodide/skeletons'
 import { NM_PER_UM } from '../../data/units'
 import { packPositions, packSkeletons } from './skeletonPacking'
+import { nodeLocator } from './topologyOps'
 import { geometryPointCount } from './transformOps'
 
 /**
@@ -219,14 +220,18 @@ export function skeletonsFromResult(
   const items: SkeletonGeometry[] = original.items.map((item, n) => {
     const from = result.offsets[n]!
     const to = result.offsets[n + 1]!
-    return {
+    const cleaned: SkeletonGeometry = {
       // The id is the draw and export key and this neuron is still that neuron — invariant 8's
       // line, and the same call `mirrorGeometry` makes.
       id: item.id,
       positions: result.points.slice(from * 3, to * 3),
       radii: result.radii.slice(from, to),
       parents: result.parents.slice(from, to),
+    }
+    return {
+      ...cleaned,
       ...labelled(item.compartments && result.compartments.slice(from, to)),
+      ...snappedTags(item, cleaned),
       /*
        * `split` and `nodeValues` deliberately not carried. They label the nodes of the tree they
        * were computed on, and cleaning renumbers them — where the source's `compartments` above
@@ -237,6 +242,33 @@ export function skeletonsFromResult(
   })
 
   return { ...original, items, bounds: boundsOf(items.map((item) => item.positions)) }
+}
+
+/**
+ * The item's tags on the cleaned nodes: each tagged node's position snapped to the nearest new
+ * node. A tag is a point on the cable rather than a node id, so it survives a renumbering the way
+ * a hand correction does — never dropped, and never left naming an index that now means another
+ * node. Two tagged nodes landing on one new node are one. Through `nodeLocator`'s grid, built
+ * once per neuron, rather than a scan per tagged node: CATMAID's `ends` sits on every finished
+ * leaf, so a large neuron carries thousands. Asked with an unbounded radius, which is its exact
+ * path — the rings a grid pays for, then a scan for a node further out than those.
+ */
+function snappedTags(
+  item: SkeletonGeometry,
+  cleaned: SkeletonGeometry,
+): { tags?: Record<string, Int32Array> } {
+  if (!item.tags || cleaned.parents.length === 0) return {}
+  const locate = nodeLocator(cleaned)
+  const tags: Record<string, Int32Array> = {}
+  for (const [name, nodes] of Object.entries(item.tags)) {
+    const snapped = new Set<number>()
+    for (const node of nodes) {
+      const at = item.positions.subarray(node * 3, node * 3 + 3)
+      snapped.add(locate(at[0]!, at[1]!, at[2]!, Infinity))
+    }
+    tags[name] = Int32Array.from(snapped)
+  }
+  return { tags }
 }
 
 /**
