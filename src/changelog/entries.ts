@@ -143,6 +143,12 @@ export const CHANGELOG: readonly ChangelogEntry[] = [
         title: 'CATMAID skeletons keep their node tags.',
         body: 'Tags such as `soma`, `axon` or `ends` now come with each skeleton, and **Clean Skeletons** moves each one to the nearest node it keeps. A node tagged `soma` is the skeleton’s soma, so dendrograms, Topology and Split Axon/Dendrite measure from there.',
       },
+      {
+        kind: 'editor',
+        date: '2026-10-11',
+        title: 'Choose how long a node keeps the data it downloaded.',
+        body: 'Right-click `cached 3d ago` on a card, or use **Cache Lifetime** in the node’s menu, to pick 1 hour, 1 day, 1 week, 30 days or **Don’t cache**. Once the data is older than that, the card says `expired`, and the next Run reads the server again and re-runs everything downstream.',
+      },
     ],
   },
   {

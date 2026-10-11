@@ -1,10 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { MockSource } from '../data/mock/MockSource'
 import type { DataSource } from '../data/source'
 import '../nodes'
 import type { CodaGraph } from './graph'
-import { addEdge, addNode, emptyGraph, setNodeParam } from './graph'
+import { addEdge, addNode, emptyGraph, setNodeCachePolicy, setNodeParam } from './graph'
 import { inferGraph } from './inference'
 import { T, column, tableSchema } from './types'
 import { registerNode } from './registry'
@@ -425,6 +425,204 @@ describe('clearing a node’s data cache', () => {
     replaced = addNode(replaced, { id: 'n', type, position: { x: 0, y: 0 }, params: {} })
     await sched.run(replaced, { mode: 'full' })
     expect(seen).toEqual([false])
+  })
+})
+
+/**
+ * A node's cache lifetime (`GraphNode.cache`, `core/cachePolicy.ts`).
+ *
+ * The recorder stands in for a node reading through a store: a refresh reads "the server" and
+ * reports now, anything else reports when the stored copy was made. A downstream node counts its
+ * own executions, because the half that is easy to get wrong is not the lapsed node — it re-runs
+ * under an *unchanged* key, so without the lapse moving that key everything below it would stay
+ * fresh on the data the lapse exists to replace.
+ */
+describe('a node’s cache lifetime', () => {
+  const HOUR = 60 * 60 * 1000
+  let refreshes: boolean[] = []
+  let downstream = 0
+  /** When the stored copy was made — what a run that does not refresh reports. */
+  let storedAt = 0
+
+  registerNode({
+    type: 'test.lifetime.source',
+    label: 'lifetime source',
+    category: 'utility',
+    cost: 'cheap',
+    dataCache: true,
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Out', type: T.table() }],
+    inferOutputs: () => ({ out: T.table() }),
+    evaluate: (ctx) => {
+      refreshes.push(ctx.refresh)
+      if (ctx.refresh) storedAt = Date.now()
+      ctx.reportFetched(storedAt)
+      return { out: tableFromRows(tableSchema(column('x', 'i64')), [{ x: 1 }]) }
+    },
+  })
+  registerNode({
+    type: 'test.lifetime.down',
+    label: 'lifetime downstream',
+    category: 'utility',
+    cost: 'cheap',
+    inputs: [{ id: 'in', label: 'In', type: T.table() }],
+    outputs: [{ id: 'out', label: 'Out', type: T.table() }],
+    inferOutputs: () => ({ out: T.table() }),
+    evaluate: (ctx) => {
+      downstream += 1
+      return { out: ctx.input('in')! }
+    },
+  })
+
+  /** Source → downstream, with the source's lifetime set to `maxAgeMs`. */
+  function chain(maxAgeMs: number | undefined): CodaGraph {
+    let g = emptyGraph('lifetime-test')
+    g = addNode(g, {
+      id: 'n',
+      type: 'test.lifetime.source',
+      position: { x: 0, y: 0 },
+      params: {},
+    })
+    g = addNode(g, {
+      id: 'd',
+      type: 'test.lifetime.down',
+      position: { x: 200, y: 0 },
+      params: {},
+    })
+    g = addEdge(g, { source: 'n', sourceHandle: 'out', target: 'd', targetHandle: 'in' })
+    return setNodeCachePolicy(g, 'n', maxAgeMs === undefined ? undefined : { maxAgeMs })
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-01T12:00:00Z'))
+    refreshes = []
+    downstream = 0
+    storedAt = Date.now()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('keeps a result inside its lifetime, and Run does nothing', async () => {
+    const graph = chain(HOUR)
+    const sched = makeScheduler()
+    await sched.run(graph, { mode: 'full' })
+    vi.setSystemTime(Date.now() + HOUR / 2)
+    sched.refreshStates(graph)
+    expect(sched.info('n').state).toBe('ok')
+
+    const summary = await sched.run(graph, { mode: 'full' })
+    expect(summary.executed).toEqual([])
+    expect(refreshes).toEqual([false])
+  })
+
+  it('lapses past it: stale downstream too, outputs kept, and the re-run reads the server', async () => {
+    const graph = chain(HOUR)
+    const sched = makeScheduler()
+    await sched.run(graph, { mode: 'full' })
+    expect(downstream).toBe(1)
+
+    vi.setSystemTime(Date.now() + 2 * HOUR)
+    sched.refreshStates(graph)
+    expect(sched.info('n').state).toBe('stale')
+    // What an edit to `n` would leave it as: waiting on an input that is no longer current.
+    expect(sched.info('d').state).toBe('blocked')
+    // A lapse is not an invalidation: what was on screen stays there until it is replaced.
+    expect(sched.output('d', 'out')).toBeDefined()
+
+    await sched.run(graph, { mode: 'full' })
+    expect(refreshes).toEqual([false, true])
+    expect(downstream).toBe(2)
+    expect(sched.fetchedAt('n')).toBe(Date.now())
+  })
+
+  it('lapses once per result, not on every derive', async () => {
+    const graph = chain(HOUR)
+    const sched = makeScheduler()
+    await sched.run(graph, { mode: 'full' })
+    vi.setSystemTime(Date.now() + 2 * HOUR)
+    sched.refreshStates(graph)
+    sched.refreshStates(graph)
+    await sched.run(graph, { mode: 'full' })
+    // And the fresh result is current again, so a second Run has nothing to do.
+    const again = await sched.run(graph, { mode: 'full' })
+    expect(again.executed).toEqual([])
+    expect(refreshes).toEqual([false, true])
+  })
+
+  it('is taken by a Run even when nothing derived the states in between', async () => {
+    // The timer is the host's nicety; the run is where fresh data is actually asked for.
+    const graph = chain(HOUR)
+    const sched = makeScheduler()
+    await sched.run(graph, { mode: 'full' })
+    vi.setSystemTime(Date.now() + 2 * HOUR)
+    await sched.run(graph, { mode: 'full' })
+    expect(refreshes).toEqual([false, true])
+    expect(downstream).toBe(2)
+  })
+
+  it('asks again when the store answers with a copy older than the lifetime', async () => {
+    // An edit re-ran the node and the store kept a month — the lapse never saw a held result.
+    storedAt = Date.now() - 2 * HOUR
+    const sched = makeScheduler()
+    await sched.run(chain(HOUR), { mode: 'full' })
+    expect(refreshes).toEqual([false, true])
+    expect(sched.fetchedAt('n')).toBe(Date.now())
+  })
+
+  it('reads the server on every execution under Don’t cache, and never lapses', async () => {
+    const graph = chain(0)
+    const sched = makeScheduler()
+    await sched.run(graph, { mode: 'full' })
+    vi.setSystemTime(Date.now() + 2 * HOUR)
+    sched.refreshStates(graph)
+    // Data cache only: an unchanged graph is still answered by the result cache.
+    expect(sched.info('n').state).toBe('ok')
+
+    sched.invalidateNode(graph, 'n')
+    await sched.run(graph, { mode: 'full' })
+    expect(refreshes).toEqual([true, true])
+  })
+
+  it('changes no key, so choosing one re-runs nothing', async () => {
+    const sched = makeScheduler()
+    await sched.run(chain(undefined), { mode: 'full' })
+    const graph = chain(7 * 24 * HOUR)
+    sched.refreshStates(graph)
+    expect(sched.info('n').state).toBe('ok')
+    expect(sched.info('d').state).toBe('ok')
+  })
+
+  it('without one, a result never lapses however old its data', async () => {
+    const graph = chain(undefined)
+    const sched = makeScheduler()
+    await sched.run(graph, { mode: 'full' })
+    vi.setSystemTime(Date.now() + 365 * 24 * HOUR)
+    sched.refreshStates(graph)
+    expect(sched.info('n').state).toBe('ok')
+  })
+
+  it('tells the host when a result is due to lapse, so a badge turns without an edit', async () => {
+    // Re-installed rather than widened: a second `useFakeTimers` keeps the first one's set.
+    vi.useRealTimers()
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    vi.setSystemTime(new Date('2026-10-01T12:00:00Z'))
+    storedAt = Date.now()
+    const onLapseDue = vi.fn()
+    const sched = new Scheduler({ resolveSource: () => source, onLapseDue })
+    const graph = chain(HOUR)
+    await sched.run(graph, { mode: 'full' })
+
+    vi.advanceTimersByTime(HOUR - 1000)
+    expect(onLapseDue).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(2000)
+    expect(onLapseDue).toHaveBeenCalledTimes(1)
+
+    // The host's answer, and all of it: a derive, never a run.
+    sched.refreshStates(graph)
+    expect(sched.info('n').state).toBe('stale')
+    expect(refreshes).toEqual([false])
   })
 })
 

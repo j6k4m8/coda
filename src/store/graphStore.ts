@@ -32,9 +32,11 @@ import {
   removeEdges,
   removeNodes,
   setNodeParam,
+  setNodeCachePolicy as setCachePolicyOn,
   setNodeHints,
   updateNode,
 } from '../core/graph'
+import type { CachePolicy } from '../core/cachePolicy'
 import {
   activeTab,
   addCells,
@@ -811,6 +813,15 @@ export interface GraphState {
    */
   setHints(nodeId: string, hints: readonly NodeHint[]): void
   /**
+   * Set how long a node may answer from the data it downloaded, or `undefined` for its default —
+   * one undo step, no auto-run. See `core/cachePolicy.ts`.
+   *
+   * Not in the provenance key, so nothing re-runs; the states are derived again, which is where a
+   * lifetime shortened past the data's age takes effect (the result lapses and turns stale).
+   * **Live under the lock**, like `setHints`: it is a fact about freshness, not the canvas.
+   */
+  setNodeCachePolicy(nodeId: string, policy: CachePolicy | undefined): void
+  /**
    * Node whose output is docked down the right-hand side of the canvas, if any.
    *
    * The overlay's non-modal twin: same surface, drawn beside the graph instead of over it, so a
@@ -1464,6 +1475,16 @@ export const useGraphStore = create<GraphState>((set, get) => {
         if (activeDoc !== id) return
         looping = true
         await iterationHandler?.(info)
+      },
+      /*
+       * A result reached the end of its node's cache lifetime. Deriving the states is the whole
+       * response — the scheduler takes the lapse there — and it is never a run: a lapse turns a
+       * badge stale, and auto-run belongs to an edit. A background document skips it and derives
+       * on the way back in, like every other callback here.
+       */
+      onLapseDue: () => {
+        if (activeDoc !== id) return
+        rec.scheduler.refreshStates(get().graph, get().inference)
       },
     })
     docs.set(id, rec)
@@ -2464,6 +2485,9 @@ export const useGraphStore = create<GraphState>((set, get) => {
     editHint: (target) => set({ editingHint: target }),
     setHints: (nodeId, hints) => {
       commit((g) => setNodeHints(g, nodeId, hints), { autoRun: false })
+    },
+    setNodeCachePolicy: (nodeId, policy) => {
+      commit((g) => setCachePolicyOn(g, nodeId, policy), { autoRun: false })
     },
 
     expandNode: (nodeId) =>

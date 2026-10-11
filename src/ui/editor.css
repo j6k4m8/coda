@@ -1794,6 +1794,13 @@ input.field--combo {
 /* Not a control: `no cache` states a fact, and nothing about it should invite a 26 MB download.
    Faded rather than hidden, for `CacheAge`'s reason — a line that appears only when something is
    wrong is one nobody learns to read. */
+/* Past the node's cache lifetime. `--status-warn`, the token measured for prose on a panel,
+   rather than the stale badge's fill, which was never measured as text. */
+.coda-node__cache--expired,
+.coda-node__cache--expired:hover {
+  color: var(--status-warn);
+}
+
 .coda-node__cache--empty,
 .coda-node__cache--busy {
   cursor: default;
@@ -3620,6 +3627,19 @@ input.field--combo {
 /* --------------------------------------------------------------------------
  * Inspector
  * -------------------------------------------------------------------------- */
+
+.inspector__cache-lifetime {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.inspector__cache-lifetime .field {
+  width: auto;
+}
 
 .inspector__header {
   display: flex;
@@ -12596,6 +12616,11 @@ select.annotate__input {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* A caption that is a sentence rather than a name, so it wraps instead of truncating. */
+.context-menu__caption--wrap {
+  white-space: normal;
+  line-height: 1.4;
 }
 
 /*

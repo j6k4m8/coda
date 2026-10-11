@@ -167,6 +167,56 @@ saved file, and carried to whoever you send the graph to — and that every node
 grows its own param. `dataset.*` and `core.tableFromUrl` still carry theirs; they are the obvious
 next candidates, and `refreshParam` stays for them.
 
+### A node's cache lifetime, and why a lapse moves the key
+
+Right-click `cached 3d ago ⟳` (or **Cache Lifetime** in the node menu, or the inspector's select)
+and choose how long *this* node may answer from what it downloaded: Default · Don't cache · 1 hour
+· 1 day · 1 week · 30 days. The presets are `CACHE_LIFETIMES` in `core/cachePolicy.ts`, one table
+read by all three surfaces. Only on nodes declaring `dataCache`. The dataset card's age is about a
+cache shared by every card on that dataset and read by Explore, Find Neurons and the summaries
+rather than by the dataset node, so a lifetime stored there would reach none of them. Its
+right-click still opens a menu (`SharedCacheMenu`), saying so and offering **Fetch Again Now**:
+two labels that look alike and answer the same gesture differently, with nothing to say why, is
+what a user reported.
+
+**It governs the data cache only.** Don't cache means every *execution* reads the server; it does
+not make an unchanged graph re-run, because the result cache still answers for its key. That is the
+scope chosen, and it is why `lapsesAt` answers `undefined` for a lifetime of 0 — a result lapsing the
+instant it landed would be the other scope by the back door.
+
+**On the node, never in its params** — `GraphNode.cache`, written only when chosen, like `hints`.
+A param is in the provenance key, so a lifetime there would re-run the node when it changed, which
+is the one thing it is not about. It travels with the file and is an undo step; it is not a nonce.
+
+**A lapse has to move the key, and nothing in the document moves it.** The obvious version — let
+the expired node re-run with `refresh` — re-fetches under an *unchanged* key, so every node below
+it stays fresh by key on top of the data the lapse existed to replace. So a lapse bumps
+`Scheduler.lapses`, folded into the hash the way `loopIndex` is: the node and its descendants turn
+stale (`blocked`, downstream, exactly as an edit leaves them) **with their outputs still on
+screen**, and the node's next execution is in `forceRefresh`. Three rules keep it from going wrong:
+
+- **Once per entry** (`lapsed`, a `WeakSet` so a replaced entry is not kept alive). Otherwise a
+  stale entry left in place lapses again on every `refreshStates` and moves the key each time.
+- **Never under a live evaluation**, which moving the key would retire — the run that is about to
+  replace the lapsed data.
+- **Taken at the top of a Run as well as on a derive**, because a Run is where fresh data is
+  actually asked for; the timer is a nicety.
+
+**The timer changes a badge and fetches nothing.** Without it, an hour-old result on an unedited
+graph stays `ok` and the Run button stays disabled. `setLapseAlarm` keeps one timeout for the soonest
+due entry and calls `SchedulerHost.onLapseDue`, which the store answers with `refreshStates` and
+nothing more — auto-run belongs to an edit. `setTimeout`'s delay is a signed 32-bit number, so the
+thirty-day preset would fire *at once*; it is capped and fires early instead, harmlessly. The
+label's own `expired` is worked out from its minute tick, so the two agree without either waiting.
+
+**The backstop is in the scheduler, not in each node.** A lapse is taken against a *held*
+result, so it cannot see an edit re-running the node onto a store copy older than its lifetime (the
+table store keeps a month whatever the node asked). Every `dataCache` node already reports its age,
+so `finish` asks: if the reported data is too old and this was not a refresh, evaluate once more
+with `refresh`. That costs a second `evaluate` in that one case — for an annotation base, one
+IndexedDB read thrown away — and needs no node to know the feature exists. Threading a `maxAgeMs`
+through `loadCachedTable` and `cachedGeometry` would save the read and touch every `DataSource`.
+
 ## A partial result, while the node is still running
 
 `ctx.publish(outputs)` puts a half-finished value on a node's output port without the node having
