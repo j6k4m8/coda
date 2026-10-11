@@ -63,7 +63,12 @@ import type { CodaGraph } from '../core/graph'
 import { GRAPH_FORMAT_VERSION } from '../core/graph'
 import { inferGraph, nodeTypes } from '../core/inference'
 import type { EnumOption, ParamValue, ParamValues } from '../core/node'
-import { configurableParams, defaultParams, makeInferContext } from '../core/node'
+import {
+  configurableParams,
+  defaultParams,
+  makeInferContext,
+  offeredOptions,
+} from '../core/node'
 import { getNodeDef, nodeDefsByCategory } from '../core/registry'
 import { defaultInputPorts, defaultOutputPorts } from '../core/ports'
 import type { AttributePart, CodaType } from '../core/types'
@@ -127,8 +132,9 @@ function readsFrom(param: ParamDef, optionalInputs: ReadonlySet<string>): string
  */
 function probeValues(param: ParamDef): ParamValue[] | undefined {
   if (param.kind === 'boolean') return [true, false]
+  // Live options only: a retired one is never chosen anew, so no gate may be advertised on it.
   if (param.kind === 'enum' && Array.isArray(param.options)) {
-    return param.options.map((o) => o.value)
+    return offeredOptions(param.options).map((o) => o.value)
   }
   if (param.kind === 'string' || param.kind === 'column') return ['', 'set']
   return undefined
@@ -213,7 +219,9 @@ function renderParam(
     bits.push(
       typeof param.options === 'function'
         ? '(options depend on the input)'
-        : `(${param.options.map((o) => o.value).join(' | ')})`,
+        : `(${offeredOptions(param.options)
+            .map((o) => o.value)
+            .join(' | ')})`,
     )
   }
   // What empty means, for the kind where empty is a choice rather than an omission. Without it

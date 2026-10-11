@@ -138,6 +138,19 @@ export const CHANGELOG: readonly ChangelogEntry[] = [
     ],
     items: [
       {
+        kind: 'node',
+        date: '2026-10-11',
+        title: '**Simplify Skeletons** prunes short twigs and downsamples.',
+        body: 'Remove twigs shorter than a cable length, as navis’s `prune_twigs` does, optionally repeating until none are left. Then keep every Nth node, or drop only the nodes that do not bend the neurite (Ramer–Douglas–Peucker or Visvalingam–Whyatt). The soma, roots, branch points and leaves always survive, and an axon/dendrite split computed upstream comes through intact.',
+        demo: 'neuron.simplifySkeletons',
+      },
+      {
+        kind: 'changed',
+        date: '2026-10-11',
+        title: '**Clean Skeletons** no longer offers *keep every Nth node*.',
+        body: 'It is on **Simplify Skeletons** now. A saved workflow that uses it still runs it and gives the same result, with a note on the card saying how to switch.',
+      },
+      {
         kind: 'data',
         date: '2026-10-11',
         title: 'CATMAID skeletons keep their node tags.',

@@ -166,5 +166,6 @@ Corrections are applied on top of the automatic split, so they still hold when y
 To count each connection's synapses by the compartment at either end (axo-dendritic, axo-axonic and so on), wire `Skeletons` into [Connection Compartments](#connectome:connectionCompartments).
 
 > [!TIP] Clean first, then split
-> Clean Skeletons renumbers the nodes, so it drops a split and says so. Put it before this node,
-> not after. Node tags survive it: each moves to the nearest new node.
+> [Clean Skeletons](#neuron.cleanSkeletons) renumbers the nodes, so it drops a split and says so.
+> Put it before this node, not after. Node tags survive it: each moves to the nearest new node.
+> [Simplify Skeletons](#neuron.simplifySkeletons) only removes nodes, so a split survives it.

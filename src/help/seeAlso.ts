@@ -142,6 +142,9 @@ const RELATED: readonly (readonly string[])[] = [
   ['neuron.splitCompartments', 'neuron.synapses', 'out.viewer3d'],
   ['neuron.splitCompartments', 'out.topology'],
   ['neuron.splitCompartments', 'neuron.cleanSkeletons'],
+  // Repairing a reconstruction vs. reducing it, and what survives the reducing.
+  ['neuron.cleanSkeletons', 'neuron.simplifySkeletons'],
+  ['neuron.splitCompartments', 'neuron.simplifySkeletons'],
   ['connectome:connectionCompartments', 'neuron.splitCompartments'],
   ['connectome:connectionCompartments', 'neuron.connectivity', 'neuron.synapseEdges'],
   ['neuron.meshes', 'neuron.cleanMeshes'],

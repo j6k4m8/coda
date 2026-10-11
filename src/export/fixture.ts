@@ -426,6 +426,33 @@ export function everythingGraph(): CodaGraph {
       params: { method: 'downsample', factor: 4 },
     },
     /*
+     * Simplify Skeletons three times, one per thinning call, since each is a different fastcore
+     * function with a different argument (a factor, a distance, a squared distance). The pruning
+     * rides along on two of them, once repeating and once not, so `coda_prune_twigs` and both
+     * values of its `repeat` are recorded too.
+     */
+    {
+      id: 'simplifyevery',
+      type: 'neuron.simplifySkeletons',
+      col: 3,
+      row: 16,
+      params: { prune: 5, repeat: true, method: 'every', factor: 3 },
+    },
+    {
+      id: 'simplifyrdp',
+      type: 'neuron.simplifySkeletons',
+      col: 3,
+      row: 17,
+      params: { method: 'rdp', tolerance: 0.25 },
+    },
+    {
+      id: 'simplifyvw',
+      type: 'neuron.simplifySkeletons',
+      col: 3,
+      row: 18,
+      params: { prune: 2, method: 'vw', area: 0.05 },
+    },
+    /*
      * Every mesh step on at once. Unlike the skeleton pipeline these four are independent
      * `if`s rather than a branch, so one node with all of them set reaches every line.
      */
@@ -1780,6 +1807,9 @@ export function everythingGraph(): CodaGraph {
     ['syn', 'points', 'attachPoints', 'in'],
     ['find', 'neurons', 'attachPoints', 'table'],
     ['skel', 'skeletons', 'cleanskeldown', 'in'],
+    ['skel', 'skeletons', 'simplifyevery', 'in'],
+    ['skel', 'skeletons', 'simplifyrdp', 'in'],
+    ['skel', 'skeletons', 'simplifyvw', 'in'],
     ['mesh', 'meshes', 'cleanmesh', 'in'],
     ['nblast', 'scores', 'matchtop', 'in'],
     ['nblast', 'scores', 'matchabove', 'in'],

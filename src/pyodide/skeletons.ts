@@ -104,3 +104,72 @@ export async function runCleanSkeletons(
   }
   return { points, parents, radii, compartments, offsets }
 }
+
+/**
+ * How Simplify Skeletons thins what survives the pruning — one of four, never two, for Clean
+ * Skeletons' reason: each throws away nodes by its own rule, and running two is the second one
+ * undoing the first's choices.
+ */
+export type SimplifyMethod = 'none' | 'every' | 'rdp' | 'vw'
+
+/**
+ * A skeleton set flattened for Simplify Skeletons.
+ *
+ * Coordinates and parents only. Pruning and thinning both keep a subset of the nodes and move
+ * none of them, so radii, labels, a computed split and per-node values never need to cross:
+ * `keep` on the way back says which rows survived and the caller gathers everything else
+ * itself, exactly.
+ */
+export type SimplifySkeletonsRequest = {
+  /** xyz interleaved, one neuron after the last, in nanometres. */
+  points: Float32Array
+  /** Parent index per point, `-1` for a root. Neuron-local. */
+  parents: Int32Array
+  /** Where each neuron starts, counted in points. Length is `count + 1`. */
+  offsets: Int32Array
+  /** Per neuron, the neuron-local soma node, or `-1` (`PackedSkeletons.somas`). Never removed. */
+  somas: Int32Array
+
+  /** Shortest twig to keep, in the units of `points`; `0` prunes nothing. */
+  prune: number
+  /** Prune again until nothing changes, navis' `recursive=True`. */
+  repeat: boolean
+  method: SimplifyMethod
+  /** Keep one node in every `factor`, for `every`. */
+  factor: number
+  /** How far the path may move, in the units of `points`, for `rdp`. */
+  tolerance: number
+  /** Smallest triangle a node may add, in the *squared* units of `points`, for `vw`. */
+  area: number
+}
+
+export interface SimplifySkeletonsResult {
+  /** Per surviving node, its neuron-local row in the request, in the original order. */
+  keep: Int32Array
+  /** Per surviving node, its parent as a neuron-local row of the survivors. */
+  parents: Int32Array
+  /** Rebuilt over the survivors. Length is `count + 1`. */
+  offsets: Int32Array
+}
+
+/** Prune twigs and thin a whole set of skeletons in one call. */
+export async function runSimplifySkeletons(
+  request: SimplifySkeletonsRequest,
+  options: CallOptions = {},
+): Promise<SimplifySkeletonsResult> {
+  const result = await callPython(
+    { module: 'skeletons', fn: 'coda_simplify_skeletons', args: [request] },
+    options,
+  )
+  const keep = int32From(result, 'keep')
+  const parents = int32From(result, 'parents')
+  const offsets = int32From(result, 'offsets')
+  // `runCleanSkeletons`' check, for the same silent failure: a short `parents` draws.
+  if (keep.length !== parents.length) {
+    throw new Error(
+      `Simplify Skeletons returned ${keep.length} kept nodes and ${parents.length} parents, ` +
+        'which do not describe one set of nodes',
+    )
+  }
+  return { keep, parents, offsets }
+}

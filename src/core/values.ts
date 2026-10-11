@@ -313,7 +313,8 @@ export interface SkeletonGeometry {
    *
    * **Absent means nobody split this skeleton.** No source sets it. It is a property of *this*
    * tree's nodes, so anything that renumbers them (Clean Skeletons) drops it; anything that only
-   * moves them (mirror, warp, heal) keeps it. Where present it is exactly as long as `radii`.
+   * moves them (mirror, warp, heal) keeps it, and one that keeps a subset of them in place
+   * (Simplify Skeletons) gathers it. Where present it is exactly as long as `radii`.
    */
   readonly split?: Uint8Array
   /**
@@ -323,7 +324,8 @@ export interface SkeletonGeometry {
    * One map rather than a field per measure, so the next per-node number (Strahler order, distance
    * from the soma) needs no new field, no new viewer mode and no new entry in `skeletonBuffers`.
    * Like `split` these are results computed for *this* tree's nodes: never set by a source, kept by
-   * a transform that only moves the nodes, dropped by one that renumbers them.
+   * a transform that only moves the nodes, dropped by one that renumbers them, gathered by one that
+   * keeps a subset in place.
    */
   readonly nodeValues?: Readonly<Record<string, Float32Array>>
   /**
@@ -333,9 +335,10 @@ export interface SkeletonGeometry {
    * **Absent means the source publishes none**, which is every source but CATMAID. Unlike `split`
    * these are the source's, and what a tag marks is a point on the cable, so a transform that only
    * moves nodes keeps them as they are and one that renumbers them (Clean Skeletons,
-   * `cleanOps.snappedTags`) re-snaps each to the nearest new node rather than dropping them — the
-   * rule hand corrections follow. A new renumbering transform must do the same: spreading the item
-   * would carry indices that now name other nodes, with nothing to say so.
+   * `cleanOps.snappedTags`; Simplify Skeletons, for the nodes it removes) re-snaps each to the
+   * nearest new node rather than dropping them — the rule hand corrections follow. A new
+   * renumbering transform must do the same: spreading the item would carry indices that now name
+   * other nodes, with nothing to say so.
    */
   readonly tags?: Readonly<Record<string, Int32Array>>
 }

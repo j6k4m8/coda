@@ -14,6 +14,7 @@ import {
   availableColumns,
   columnsKnown,
   listEntries,
+  offeredOptions,
   optionText,
   suggestionOption,
 } from '../../core/node'
@@ -155,11 +156,12 @@ export function ParamField({ param, value, ctx, onChange, variant = 'node' }: Pa
 
     case 'enum': {
       const options = typeof param.options === 'function' ? param.options(ctx) : param.options
+      const current = typeof value === 'string' ? value : param.default
       return (
         <SelectField
           label={label}
-          value={typeof value === 'string' ? value : param.default}
-          options={options}
+          value={current}
+          options={offeredOptions(options, current)}
           {...(param.empty ? { empty: param.empty } : {})}
           onChange={onChange}
         />
@@ -234,7 +236,7 @@ export function ParamField({ param, value, ctx, onChange, variant = 'node' }: Pa
       return (
         <ChipsField
           label={label}
-          available={options}
+          available={offeredOptions(options, selected)}
           /*
            * The options come from the node, not from an upstream schema that may not have
            * arrived — so a stored value that is not in the list is genuinely gone, never merely

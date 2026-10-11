@@ -22,6 +22,11 @@
  * healing has something to join). A fourth, empty neuron rides along because the item count is
  * an invariant — the attribute table is index-aligned, so a set that came back one neuron
  * shorter would put every label after it on the wrong row.
+ *
+ * The second half runs `coda_simplify_skeletons` (Simplify Skeletons) on four shapes of its own,
+ * each the case one of Coda's rules on top of `prune_twigs` is about: the soma survives, an
+ * unbranched fragment is never pruned, and `repeat` catches the twig a first pass leaves behind.
+ * fastcore's `mask` reads the opposite way from its docstring, and the soma check is what pins it.
  */
 
 import { bootPyodide, loadModule, probeReport } from './lib/pyodideProbe.mjs'
@@ -34,6 +39,22 @@ const { check, attempt, finish } = probeReport()
 
 /** Nanometres, as Coda holds them — every distance below is in these units. */
 const UM = 1000
+
+/** Shapes flattened the way `skeletonPacking.ts` flattens them: points, parents, offsets. */
+function pack(shapes) {
+  const total = shapes.reduce((n, s) => n + s.parents.length, 0)
+  const points = new Float32Array(total * 3)
+  const parents = new Int32Array(total)
+  const offsets = new Int32Array(shapes.length + 1)
+  let at = 0
+  shapes.forEach((shape, index) => {
+    shape.xyz.forEach((p, i) => points.set(p, (at + i) * 3))
+    parents.set(shape.parents, at)
+    at += shape.parents.length
+    offsets[index + 1] = at
+  })
+  return { points, parents, offsets, total }
+}
 
 /**
  * Four neurons flattened the way `cleanRequestFrom` flattens them.
@@ -74,23 +95,12 @@ function fixture() {
     { xyz: [], parents: [] },
   ]
 
-  const total = shapes.reduce((n, s) => n + s.parents.length, 0)
-  const points = new Float32Array(total * 3)
-  const parents = new Int32Array(total)
+  const { points, parents, offsets, total } = pack(shapes)
   const radii = new Float32Array(total).fill(50)
   // Compartments: the chain is dendrite (3) for its first five nodes and axon (2) after, so a
   // label that rides the wrong index map comes back mixed up; the rest are unlabelled.
   const compartments = new Uint8Array(total)
   for (let i = 0; i < 10; i++) compartments[i] = i < 5 ? 3 : 2
-  const offsets = new Int32Array(shapes.length + 1)
-
-  let at = 0
-  shapes.forEach((shape, index) => {
-    shape.xyz.forEach((p, i) => points.set(p, (at + i) * 3))
-    parents.set(shape.parents, at)
-    at += shape.parents.length
-    offsets[index + 1] = at
-  })
   return {
     points,
     parents,
@@ -116,8 +126,19 @@ function clean(label, overrides) {
   const { points, parents, radii, compartments, offsets } = fixture()
   const notes = []
   const proxy = attempt(`${label}: the call itself`, () =>
-    run({ points, parents, radii, compartments, offsets, ...DEFAULTS, ...overrides }, (f, note) =>
-      notes.push(`${f.toFixed(2)} ${note ?? ''}`),
+    run(
+      {
+        points,
+        parents,
+        radii,
+        compartments,
+        offsets,
+        // No soma on any of them (`-1`), so a heal keeps the root fastcore picked.
+        somas: new Int32Array(offsets.length - 1).fill(-1),
+        ...DEFAULTS,
+        ...overrides,
+      },
+      (f, note) => notes.push(`${f.toFixed(2)} ${note ?? ''}`),
     ),
   )
   if (!proxy) return undefined
@@ -150,26 +171,32 @@ function clean(label, overrides) {
     chain.length > 0 &&
       chain.every(([x, c]) => (x < 4.2 ? c === 3 : x > 4.8 ? c === 2 : c === 2 || c === 3)),
   )
-  check(`${label}: offsets still describe 4 neurons`, out.offsets.length === 5)
   check(
     `${label}: points, parents and radii describe one set of nodes`,
     out.points.length === out.parents.length * 3 && out.radii.length === out.parents.length,
   )
+  checkTopology(label, out)
+  check(`${label}: progress was reported`, notes.length > 0)
+  return out
+}
 
+/**
+ * The three properties every result must hold, whichever entry point made it: four neurons still,
+ * every parent `-1` or an index into its own neuron — the one Coda added on top of fastcore, and
+ * the one that fails silently — and the empty neuron still empty.
+ */
+function checkTopology(label, out) {
+  check(`${label}: offsets still describe 4 neurons`, out.offsets.length === 5)
   let valid = true
   for (let n = 0; n + 1 < out.offsets.length; n++) {
     const from = out.offsets[n]
     const to = out.offsets[n + 1]
     for (let i = from; i < to; i++) {
-      const parent = out.parents[i]
-      if (parent < -1 || parent >= to - from) valid = false
+      if (out.parents[i] < -1 || out.parents[i] >= to - from) valid = false
     }
   }
-  // The one Coda added on top of fastcore, and the one that fails silently.
   check(`${label}: every parent is -1 or an index into its own neuron`, valid)
   check(`${label}: the empty neuron stayed empty`, out.offsets[4] === out.offsets[3])
-  check(`${label}: progress was reported`, notes.length > 0)
-  return out
 }
 
 /** Nodes per neuron, from the offsets. */
@@ -259,4 +286,140 @@ const counts = (out) => Array.from(out.offsets).slice(1).map((v, i) => v - out.o
 }
 
 run.destroy()
+
+// ---------------------------------------------------------------------------
+// Simplify: prune twigs, then thin
+// ---------------------------------------------------------------------------
+
+/*
+ * Four neurons, each the case one rule is about:
+ *
+ * - a tree whose branch point at node 2 carries a 1 µm twig ending in the **soma** (node 3), and
+ *   a second branch point at node 5 carrying a 1 µm twig (node 8) and a 2 µm one (6, 7) — plus a
+ *   2-node **fragment** 96 µm away, unbranched and shorter than any threshold below;
+ * - a tree where pruning once leaves a new short twig, so `repeat` changes the answer;
+ * - a straight chain, unbranched, shorter than every threshold — it must come back whole;
+ * - empty.
+ */
+const SIMPLIFY_SHAPES = [
+  {
+    xyz: [
+      [0, 0, 0],
+      [UM, 0, 0],
+      [2 * UM, 0, 0],
+      [2 * UM, UM, 0],
+      [3 * UM, 0, 0],
+      [4 * UM, 0, 0],
+      [5 * UM, 0, 0],
+      [6 * UM, 0, 0],
+      [4 * UM, UM, 0],
+      [100 * UM, 0, 0],
+      [101 * UM, 0, 0],
+    ],
+    parents: [-1, 0, 1, 2, 2, 4, 5, 6, 5, -1, 9],
+    soma: 3,
+  },
+  {
+    xyz: [
+      [0, 0, 0],
+      [UM, 0, 0],
+      [UM, UM, 0],
+      [UM, 1.5 * UM, 0],
+      [1.5 * UM, UM, 0],
+      [11 * UM, 0, 0],
+    ],
+    parents: [-1, 0, 1, 2, 2, 1],
+    soma: -1,
+  },
+  {
+    xyz: Array.from({ length: 10 }, (_, i) => [i * UM, 0, 0]),
+    parents: Array.from({ length: 10 }, (_, i) => i - 1),
+    soma: -1,
+  },
+  { xyz: [], parents: [], soma: -1 },
+]
+
+const simplifyRun = py.globals.get('coda_simplify_skeletons')
+
+/** Per neuron, the kept rows — or undefined where the call failed. */
+function simplify(label, overrides) {
+  const { points, parents, offsets } = pack(SIMPLIFY_SHAPES)
+  const somas = Int32Array.from(SIMPLIFY_SHAPES.map((s) => s.soma))
+  const proxy = attempt(`${label}: the call itself`, () =>
+    simplifyRun({
+      points,
+      parents,
+      offsets,
+      somas,
+      prune: 0,
+      repeat: false,
+      method: 'none',
+      factor: 2,
+      tolerance: 0,
+      area: 0,
+      ...overrides,
+    }),
+  )
+  if (!proxy) return undefined
+  const out = proxy.toJs({ dict_converter: Object.fromEntries })
+  proxy.destroy()
+
+  check(`${label}: keep is int32`, out.keep instanceof Int32Array)
+  check(`${label}: parents are int32, not int64`, out.parents instanceof Int32Array)
+  check(`${label}: one parent per kept node`, out.keep.length === out.parents.length)
+  checkTopology(label, out)
+  // `keep` is in the original order, which is what lets the gather be a straight index.
+  let ordered = true
+  for (let n = 0; n + 1 < out.offsets.length; n++) {
+    for (let i = out.offsets[n] + 1; i < out.offsets[n + 1]; i++) {
+      if (out.keep[i] <= out.keep[i - 1]) ordered = false
+    }
+  }
+  check(`${label}: kept rows are in their original order`, ordered)
+  return Array.from({ length: 4 }, (_, n) =>
+    Array.from(out.keep.slice(out.offsets[n], out.offsets[n + 1])),
+  )
+}
+
+{
+  const kept = simplify('prune 1.5 µm', { prune: 1.5 * UM })
+  if (kept) {
+    // Node 8 (a 1 µm twig) goes; node 3 is as short but is the soma; 6–7 are 2 µm and stay.
+    check(
+      'prune: the short twig went and the soma twig stayed',
+      String(kept[0]) === '0,1,2,3,4,5,6,7,9,10',
+    )
+    check(
+      'prune: the short unbranched fragment was not pruned',
+      kept[0].includes(9) && kept[0].includes(10),
+    )
+    check('prune: an unbranched neuron came back whole', kept[2].length === 10)
+  }
+}
+
+{
+  const once = simplify('prune 2 µm once', { prune: 2 * UM })
+  const again = simplify('prune 2 µm repeated', { prune: 2 * UM, repeat: true })
+  if (once && again) {
+    // Once removes the two 0.5 µm twigs at node 2, which leaves 1→2 as a 1 µm twig of its own.
+    check('repeat: one pass leaves the new short twig', String(once[1]) === '0,1,2,5')
+    check('repeat: repeating removes it too', String(again[1]) === '0,1,5')
+  }
+}
+
+for (const [label, overrides] of [
+  ['every 3', { method: 'every', factor: 3 }],
+  ['rdp 0.25 µm', { method: 'rdp', tolerance: 0.25 * UM }],
+  ['vw 0.05 µm²', { method: 'vw', area: 0.05 * UM * UM }],
+]) {
+  const kept = simplify(label, overrides)
+  if (kept) {
+    check(`${label}: the soma survived`, kept[0].includes(3))
+    // Root, branch points and leaves: fastcore's promise, and what keeps it the same neuron.
+    check(`${label}: the landmarks survived`, [0, 2, 5, 7, 8].every((n) => kept[0].includes(n)))
+    check(`${label}: the collinear chain lost nodes`, kept[2].length < 10)
+  }
+}
+
+simplifyRun.destroy()
 finish(py)

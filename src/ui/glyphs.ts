@@ -538,6 +538,15 @@ const BUILT_IN_GLYPHS: Readonly<Record<string, readonly GlyphShape[]>> = {
     ['path', { d: 'M8 19.6v-5.2L5 11M8 14.4l3.2-2.8M11.2 11.6l-.8-3' }],
     ['path', { d: 'M17.6 4.6l.9 2.3 2.3.9-2.3.9-.9 2.3-.9-2.3-2.3-.9 2.3-.9z' }],
   ],
+  // The arbour in a few straight strokes with a dot on each node left, and one short twig drawn
+  // faint beside a cut: fewer nodes, and a twig gone. No spark — this removes rather than repairs.
+  'neuron.simplifySkeletons': [
+    ['path', { d: 'M9 20V13.2L5 7.6M9 13.2l5.2-3.6.8-5' }],
+    ['circle', { cx: '9', cy: '13.2', r: '1.2', fill: 'currentColor', stroke: 'none' }],
+    ['circle', { cx: '14.2', cy: '9.6', r: '1.2', fill: 'currentColor', stroke: 'none' }],
+    ['path', { d: 'M14.2 9.6l5 2', strokeOpacity: '.4' }],
+    ['path', { d: 'M16 9l-.8 3.2' }],
+  ],
   // The mesh solid with the same spark, smaller and in the corner. Two nodes, one verb, one
   // mark.
   'neuron.cleanMeshes': [

@@ -2298,6 +2298,33 @@ transform_neurons_2 <- xform(skeletons, reg = landmark_transform)
 # the exact pipeline; it calls navis-fastcore, which is what Coda ran.
 ```
 
+```{r simplify-skeletons}
+# ── Simplify Skeletons ──
+# TODO: nat has prune_twigs(), but Coda adds two protections to it: the soma
+# is never removed, and a fragment with no branch point is never pruned. R
+# also has no Ramer-Douglas-Peucker or Visvalingam-Whyatt thinning for
+# skeletons. Export as a notebook for the exact steps; it calls
+# navis-fastcore, which is what Coda ran.
+```
+
+```{r simplify-skeletons-2}
+# ── Simplify Skeletons ──
+# TODO: nat has prune_twigs(), but Coda adds two protections to it: the soma
+# is never removed, and a fragment with no branch point is never pruned. R
+# also has no Ramer-Douglas-Peucker or Visvalingam-Whyatt thinning for
+# skeletons. Export as a notebook for the exact steps; it calls
+# navis-fastcore, which is what Coda ran.
+```
+
+```{r simplify-skeletons-3}
+# ── Simplify Skeletons ──
+# TODO: nat has prune_twigs(), but Coda adds two protections to it: the soma
+# is never removed, and a fragment with no branch point is never pruned. R
+# also has no Ramer-Douglas-Peucker or Visvalingam-Whyatt thinning for
+# skeletons. Export as a notebook for the exact steps; it calls
+# navis-fastcore, which is what Coda ran.
+```
+
 ```{r nblast-k-nn}
 # ── NBLAST k-NN ──
 # TODO: nat.nblast has no shortlisted k-nearest search. The closest
