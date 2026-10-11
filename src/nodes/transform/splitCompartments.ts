@@ -41,8 +41,10 @@ import {
   splitWarning,
   withSplit,
 } from '../lib/compartmentOps'
+import type { SplitCorrection } from '../lib/splitCorrections'
 import { CORRECTIONS_PARAM, readCorrections } from '../lib/splitCorrections'
 import { frameClash, frameClashMessage } from '../lib/transformOps'
+import { healSkeleton } from '../lib/arborHeal'
 
 /**
  * The automatic split, remembered per input pair and settings.
@@ -109,6 +111,31 @@ async function automaticSplit(
 
 /** What a frame mismatch does to the split, whichever axis it is on. */
 const SNAP_ANYWHERE = 'Every synapse would snap to whichever node happened to be nearest.'
+/**
+ * The skeletons corrections are applied on: each split neuron that carries a correction and arrived
+ * in pieces, joined — it was healed to be split at all, and an arbour built from the delivered
+ * parents reaches only the fragment its root is on, so a correction anywhere else lands nowhere and
+ * is counted stale. The join is `arborHeal.ts`', the one the editor draws, so a click and the Run
+ * agree on what is distal. Nobody else pays: an uncorrected or whole neuron is passed as it is.
+ */
+async function correctionTrees(
+  skeletons: SkeletonsValue,
+  split: SetSplit,
+  corrections: readonly SplitCorrection[],
+  signal: AbortSignal | undefined,
+): Promise<SkeletonsValue> {
+  if (corrections.length === 0) return skeletons
+  const corrected = new Set(corrections.map((c) => c.neuron))
+  // `healSkeleton` answers a whole neuron, or one joined before, without Python.
+  const items = await Promise.all(
+    skeletons.items.map(async (item, i) =>
+      split.status[i] === 'ok' && corrected.has(item.id)
+        ? (await healSkeleton(item, signal)).skeleton
+        : item,
+    ),
+  )
+  return { ...skeletons, items }
+}
 
 /** The two columns the split reads off a synapse cloud. */
 const NEEDED_COLUMNS = ['neuronId', 'polarity'] as const
@@ -254,7 +281,8 @@ registerNode({
     )
     const { synapses } = automatic
     const corrections = readCorrections(ctx.params[CORRECTIONS_PARAM])
-    const { split, applied, stale } = correctSplit(skeletons, automatic.split, corrections)
+    const trees = await correctionTrees(skeletons, automatic.split, corrections, ctx.signal)
+    const { split, applied, stale } = correctSplit(trees, automatic.split, corrections)
     if (stale > 0) {
       ctx.warn(
         `${stale} of ${corrections.length} hand corrections no longer land on a split neuron ` +

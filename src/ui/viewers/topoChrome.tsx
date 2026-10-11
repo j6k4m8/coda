@@ -9,6 +9,21 @@ import type { PartnerGrouping } from '../../nodes/lib/profileStats'
 import type { PartnerListProps } from './PartnerList'
 import { PartnerList } from './PartnerList'
 
+/**
+ * A neuron's name, then its id muted beside it — the id left out where the name already is the id
+ * (a neuron with no type), rather than written twice.
+ */
+export function TopoName({ name, neuronId }: { name: string; neuronId: string | null }) {
+  return (
+    <>
+      <span className="topo__name" title={name}>
+        {name}
+      </span>
+      {neuronId && neuronId !== name && <code className="topo__id">{neuronId}</code>}
+    </>
+  )
+}
+
 /** Pager, the neuron's name and id, and the Pin and Data toggles. */
 export function TopoBar({
   index,
@@ -55,10 +70,7 @@ export function TopoBar({
       >
         ›
       </button>
-      <span className="topo__name" title={name}>
-        {name}
-      </span>
-      {neuronId && <code className="topo__id">{neuronId}</code>}
+      <TopoName name={name} neuronId={neuronId} />
       <span className="topo__spacer" />
       <button
         type="button"

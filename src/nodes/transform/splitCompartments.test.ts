@@ -19,6 +19,7 @@ import { MockSource } from '../../data/mock/MockSource'
 import { getConnectome } from '../../data/mock/generate'
 import type * as TopologyBridge from '../../pyodide/topology'
 import type { SplitCompartmentsRequest } from '../../pyodide/topology'
+import type { CleanSkeletonsResult } from '../../pyodide/skeletons'
 import { writeCorrection } from '../lib/splitCorrections'
 import '../index'
 
@@ -28,6 +29,11 @@ vi.mock('../../pyodide/topology', async (importOriginal) => ({
 }))
 const { runSplitCompartments } = await import('../../pyodide/topology')
 const mockedRun = vi.mocked(runSplitCompartments)
+
+// The heal behind corrections on a fragmented neuron; each test that reaches it says what it joins.
+vi.mock('../../pyodide/skeletons', () => ({ runCleanSkeletons: vi.fn() }))
+const { runCleanSkeletons } = await import('../../pyodide/skeletons')
+const mockedHeal = vi.mocked(runCleanSkeletons)
 
 const DEF = requireNodeDef('neuron.splitCompartments')
 const source = new MockSource({ latencyMs: 0 })
@@ -174,6 +180,48 @@ describe('neuron.splitCompartments', () => {
     if (!isTableValue(summary)) throw new Error('expected a table')
     expect(summary.data['corrections']).toEqual([1, 0])
     expect(warnings.join(' ')).toMatch(/1 of 2 hand corrections no longer land/)
+  })
+
+  it('applies a correction across the pieces of a neuron healed to be split', async () => {
+    // The first neuron cut in two halfway along its node list. A split healed it, so a correction
+    // from its root outward must reach the far piece too — measured on the delivered parents it
+    // reached only the piece the root is on.
+    const { skeletons, synapses } = await inputs()
+    const whole = skeletons.items[0]!
+    const cut = Int32Array.from(whole.parents)
+    const at = Math.floor(cut.length / 2)
+    cut[at] = -1
+    const pieces = {
+      ...skeletons,
+      items: [{ ...whole, parents: cut }, ...skeletons.items.slice(1)],
+    }
+    mockedHeal.mockResolvedValue({
+      parents: Int32Array.from(whole.parents),
+    } as CleanSkeletonsResult)
+    const p = whole.positions
+    const params = {
+      heal: true,
+      corrections: [
+        writeCorrection({
+          neuron: whole.id,
+          at: [p[0]!, p[1]!, p[2]!],
+          scope: 'distal',
+          to: 'linker',
+        }),
+      ],
+    }
+    // Twice: the second Run is answered from the join the first one made — the editor's, in use —
+    // and must still correct the joined tree rather than the pieces.
+    for (const pass of [1, 2]) {
+      const { outputs, warnings } = await run({ skeletons: pieces, synapses }, params)
+      expect(mockedHeal, `pass ${pass}`).toHaveBeenCalledTimes(1)
+      const split = (outputs['out'] as SkeletonsValue).items[0]!.split!
+      expect(split[at], `pass ${pass}`).toBe(3)
+      expect(split.every((code) => code === 3)).toBe(true)
+      expect(warnings.join(' ')).not.toMatch(/no longer land/)
+      // The geometry downstream is the one delivered: healing is for the arbour, not the output.
+      expect((outputs['out'] as SkeletonsValue).items[0]!.parents).toBe(cut)
+    }
   })
 
   it('says how many neurons could not be split, and points a fragmented one at Heal', async () => {

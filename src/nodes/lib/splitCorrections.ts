@@ -126,8 +126,8 @@ const arbors = perGeometry(() => new Map<number, Arbor>())
  * afresh each time (one pass, cheap beside a build), so a relabelled soma over the same arrays is a
  * different key rather than a tree rooted on the old one.
  *
- * One known limit: built without heal bridges, so with `Heal fragmented skeletons` on, a correction
- * reaches only the fragment holding its own root; one anchored on another fragment is stale.
+ * It walks the parents it is handed, so a forest reaches only the fragment holding the root: a
+ * neuron healed to be split is handed over healed (`arborHeal.ts`) by both callers.
  */
 export function splitArbor(skeleton: SkeletonGeometry, root?: number): Arbor {
   const at = root ?? resolveRoot(skeleton, 'soma').node
@@ -147,8 +147,8 @@ export function snapToNode(skeleton: SkeletonGeometry, at: readonly number[]): n
  *
  * Returns the labels it was given, untouched, when there is nothing to apply. A correction that
  * cannot be placed — no node within `SNAP_NM`, or a node the walk from the root never reaches
- * (another fragment of an unhealed forest), where "distal" has no meaning — is skipped and not
- * counted in `applied`, which is what the caller's stale count is the rest of.
+ * (another fragment of a forest the caller did not heal), where "distal" has no meaning — is
+ * skipped and not counted in `applied`, which is what the caller's stale count is the rest of.
  */
 export function applyCorrections(
   skeleton: SkeletonGeometry,

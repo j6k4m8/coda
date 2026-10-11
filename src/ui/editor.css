@@ -3541,6 +3541,13 @@ input.field--combo {
   box-shadow: var(--shadow-panel);
   padding: 3px;
 }
+/*
+ * A portalled menu is a child of the body, outside any overlay's stacking context, so it takes
+ * `.explore-thumb-preview`'s band: above the viewer overlay, below the start page.
+ */
+.context-menu--portal {
+  z-index: 65;
+}
 .context-menu__item {
   display: flex;
   align-items: center;

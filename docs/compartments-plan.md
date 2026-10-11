@@ -281,9 +281,12 @@ this neuron". A click opens a small menu: "From here outward → axon / dendrite
 so the card keeps its threshold rows. It is drawn on every full-size surface (the overlay, the
 dock, a dashboard cell), and is `fullSizeOnly`: never the inspector's `summary`, which keeps its
 geometry preview. The tree a correction is measured over is `splitArbor`, cached on the geometry's
-arrays so neither the node nor the editor rebuilds it per click. Known limit: it carries no heal
-bridges, so with Heal on a correction reaches only the fragment holding the root, the one the
-editor draws. One on another fragment counts stale.
+arrays so neither the node nor the editor rebuilds it per click. *Fixed 2026-10-10:* a split
+neuron that arrived in pieces is drawn, and corrected, on its healed tree (`arborHeal.ts`, cached
+per geometry so the node's new item per correction does not re-heal). Built from the
+delivered parents, the arbour reached only the fragment holding the root, and once the root was the
+soma that could be almost nothing: male-CNS 36723's soma is a 17-node fragment of 1,767 nodes, drawn
+as a three-armed star. The output geometry stays as delivered.
 `SNAP_NM` is 2 µm. "Towards the root" became **everything else**, the complement of the subtree,
 as the splitter's proximal is. The cache holds 8 settings per skeletons value. *Built, later:* the editor draws the **unrooted** layout (`equalAngle`, with the
 dendrogram's daylight passes), and the click menu can **re-root** at the nearer end of the clicked

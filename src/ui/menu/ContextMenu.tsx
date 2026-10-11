@@ -81,7 +81,9 @@ export function ContextMenu({
   const menu = (
     <div
       ref={ref}
-      className={className ? `context-menu ${className}` : 'context-menu'}
+      className={['context-menu', portal && 'context-menu--portal', className]
+        .filter(Boolean)
+        .join(' ')}
       style={place}
       role={role}
       aria-label={label}

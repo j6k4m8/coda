@@ -1,6 +1,7 @@
 /**
- * The first neuron of a skeletons value, joined into one tree where it arrived in pieces — the
- * Neuron Dendrogram card's half of `nodes/lib/arborHeal.ts`, which the node's Run shares.
+ * A skeleton joined into one tree where it arrived in pieces — the cards' half of
+ * `nodes/lib/arborHeal.ts`, whose join both nodes' Runs share: the Neuron Dendrogram's neuron, and
+ * whichever neuron Split Axon/Dendrite's editor is on.
  *
  * A whole skeleton, or one healed before, is answered during render, so a neuron with nothing to
  * heal goes straight to `ready` — an effect flipping it there a commit later would hand the card a
@@ -12,7 +13,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { errorMessage } from '../../core/errors'
-import type { SkeletonGeometry, SkeletonsValue } from '../../core/values'
+import type { SkeletonGeometry } from '../../core/values'
 import type { Healed } from '../../nodes/lib/arborHeal'
 import { healSkeleton, healedNow } from '../../nodes/lib/arborHeal'
 
@@ -26,9 +27,8 @@ type Settled = { for: SkeletonGeometry } & (
   { status: 'ready'; data: Healed } | { status: 'error'; message: string }
 )
 
-/** The first neuron of `value`, joined into one tree where it arrived in pieces. */
-export function useHealedSkeleton(value: SkeletonsValue | undefined): HealState {
-  const skeleton = value?.items[0]
+/** `skeleton`, joined into one tree where it arrived in pieces. */
+export function useHealedSkeleton(skeleton: SkeletonGeometry | undefined): HealState {
   const now = useMemo(() => (skeleton ? healedNow(skeleton) : undefined), [skeleton])
   const [settled, setSettled] = useState<Settled | undefined>()
 
