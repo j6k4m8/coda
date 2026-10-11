@@ -25,6 +25,8 @@ import { UNIDENTIFIED, groupSynapses } from './synblastOps'
 import type { SplitCorrection } from './splitCorrections'
 import { applyCorrections } from './splitCorrections'
 import { foldColumns } from './tableOps'
+import { checkGeometryUnits } from '../../data/units'
+import { frameClash, frameClashMessage } from './transformOps'
 import type { CompartmentStats, SynapseAssignment, SynapseSite } from './topologyOps'
 import {
   assignSynapses,
@@ -412,4 +414,37 @@ export function splitWarning(
         `${where.heal ?? ''} to join them first.`
       : '')
   )
+}
+
+const SNAP_CONSEQUENCE = 'a synapse cannot be placed on the skeleton it belongs to.'
+
+/**
+ * The skeletons' half of `requireSynapseFrame`, for a caller that can check it before it has the
+ * synapses — Connection Compartments, before the fetch the answer would be refused after.
+ */
+export function requireSkeletonUnits(skeletons: SkeletonsValue): void {
+  checkGeometryUnits('The', skeletons, 'skeletons', 'Skeletons', SNAP_CONSEQUENCE)
+}
+
+/** Both frame clauses of `requireSynapseFrame`: neither is fixable by snapping harder. */
+const SNAP_ANYWHERE = 'Every synapse would snap to whichever node happened to be nearest.'
+
+/**
+ * That skeletons and the synapses placed on them share units and a template space — what both
+ * the split and Connection Compartments check before snapping a site to a node. Throws, naming
+ * the remedy; nothing is snapped across a frame.
+ */
+export function requireSynapseFrame(skeletons: SkeletonsValue, points: PointsValue): void {
+  requireSkeletonUnits(skeletons)
+  checkGeometryUnits('The', points, 'synapses', 'Synapses', SNAP_CONSEQUENCE)
+  const clash = frameClash(skeletons, points)
+  if (clash) {
+    throw new Error(
+      frameClashMessage(
+        clash,
+        { left: 'The skeletons', right: 'the synapses' },
+        { units: SNAP_ANYWHERE, space: SNAP_ANYWHERE },
+      ),
+    )
+  }
 }

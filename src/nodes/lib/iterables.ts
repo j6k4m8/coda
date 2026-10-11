@@ -317,6 +317,11 @@ export function partitionElements<V extends IterableValue>(
 export function selectPoints(v: PointsValue, keep: (index: number) => boolean): PointsValue {
   const indices: number[] = []
   for (let i = 0; i < v.attributes.length; i++) if (keep(i)) indices.push(i)
+  return selectPointsAt(v, indices)
+}
+
+/** `selectPoints` for a caller already holding the ascending row indices it keeps. */
+export function selectPointsAt(v: PointsValue, indices: readonly number[]): PointsValue {
   if (indices.length === v.attributes.length) return v
   const positions = new Float32Array(indices.length * 3)
   const source = v.positions

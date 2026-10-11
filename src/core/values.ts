@@ -884,7 +884,7 @@ export function getRow(table: TableValue, index: number): Record<string, CellVal
 }
 
 /** Materialise selected row indices into a new table, preserving schema. */
-export function selectRows(table: TableValue, indices: number[]): TableValue {
+export function selectRows(table: TableValue, indices: readonly number[]): TableValue {
   const data: Record<string, ColumnData> = {}
   for (const col of table.schema.columns) {
     const src = table.data[col.name]!

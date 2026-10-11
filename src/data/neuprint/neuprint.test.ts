@@ -2543,6 +2543,15 @@ describe('synapsesBetweenCypher', () => {
     expect(synapsesBetweenCypher(base)).toContain('RETURN n.bodyId, n.type, m.bodyId, m.type,')
   })
 
+  it('returns the postsynaptic site after the rest under both, drawing the presynaptic one', () => {
+    const both = synapsesBetweenCypher({ ...base, location: 'both' })
+    // Both ends are matched for every location; only the RETURN differs.
+    expect(both.replace(/,\s*ms\.location\.x, ms\.location\.y, ms\.location\.z$/, '')).toBe(
+      synapsesBetweenCypher(base),
+    )
+    expect(both).toMatch(/ns\.confidence, ms\.location\.x, ms\.location\.y, ms\.location\.z$/)
+  })
+
   it('binds the given end and leaves the other open, from either side', () => {
     // Sources only: everything they synapse onto. No target filter, and still bound first.
     const down = synapsesBetweenCypher({ ...base, targetIds: undefined }).split('\n')

@@ -112,6 +112,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    date: '2026-10-11',
+    title: 'Connections by compartment',
+    summary:
+      'The new Connection Compartments node counts each connection’s synapses by where they sit at either end: axo-dendritic, axo-axonic, dendro-dendritic and so on.',
+    highlight: true,
+    features: [
+      {
+        kind: 'node',
+        date: '2026-10-11',
+        title: 'Connection Compartments',
+        body:
+          '**Connection Compartments** takes an edge list, for example from Connectivity, and skeletons split by **Split Axon/Dendrite**. It fetches every synapse behind each edge and looks up the compartment at both ends: the presynaptic site on the presynaptic neuron’s split, the postsynaptic site on the postsynaptic one’s. Each edge then gets its synapses counted as axo-dendritic, axo-axonic, dendro-dendritic, dendro-axonic, linker or unsplit, either as a column per class or as a row per class.\n\n' +
+          'The **Synapses** output carries every synapse with its two compartments, so a 3D View coloured by `connection` shows where on the arbour each kind sits. Fetch the skeletons for Connectivity’s **Neuron Set**, so that the neurons at both ends of every edge are split.',
+        demo: 'connectome:connectionCompartments',
+      },
+    ],
+  },
+  {
     date: '2026-10-10',
     title: 'Skeletons rooted at the soma',
     summary:

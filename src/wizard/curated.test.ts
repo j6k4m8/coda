@@ -8,7 +8,7 @@
  * `demo.test.ts`', which reaches these through `demoGraph`, and overlap `placeGuards.test.ts`'.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import '../nodes'
 import { findParam, validateParamValue } from '../core/node'
@@ -21,6 +21,13 @@ import { elementCount, isIterableValue } from '../nodes/lib/iterables'
 import { mockScheduler } from '../test/scheduler'
 import { CURATED, curatedGraph, exampleGraph, isSynthetic } from './curated'
 import { demoGraph } from './demo'
+import type * as TopologyBridge from '../pyodide/topology'
+
+// Split Axon/Dendrite runs in Pyodide, which vitest has no runtime for (`test/splitStub.ts`).
+vi.mock('../pyodide/topology', async (importOriginal) => ({
+  ...(await importOriginal<typeof TopologyBridge>()),
+  runSplitCompartments: vi.fn((await import('../test/splitStub')).fakeSplit),
+}))
 
 registerBuiltinSources()
 // The synthetic source waits ~220 ms per call to feel like a network; nothing here is about that.

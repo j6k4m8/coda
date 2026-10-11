@@ -32,6 +32,10 @@ import {
 } from '../../nodes/lib/synapseParams'
 import { MAX_NEURONS, neuronIdsFrom } from '../../nodes/lib/limitParams'
 
+/** What a source without `fetchSynapsesBetween` says, at edit time and on a Run, on each node. */
+export const cannotFetchBetween = (label: string | undefined): string =>
+  `${label ?? 'This data source'} cannot fetch the synapses between two neuron sets.`
+
 export const synapsesNode = packNode({
   type: 'neuron.synapses',
   label: 'Synapses',
@@ -251,10 +255,7 @@ export const synapsesBetweenNode = packNode({
     if (!sourceSupports(dataset, 'synapses'))
       return ['This data source has no synapse locations']
     if (!sourceSupports(dataset, 'synapsesBetween')) {
-      return [
-        `${sourceLabel(dataset) ?? 'This data source'} cannot fetch the synapses between ` +
-          `two neuron sets.`,
-      ]
+      return [cannotFetchBetween(sourceLabel(dataset))]
     }
     return []
   },
@@ -263,7 +264,7 @@ export const synapsesBetweenNode = packNode({
     const dataset = requireDataset(ctx.input('dataset'))
     const source = ctx.resolveSource(dataset.sourceId)
     if (!source.fetchSynapsesBetween) {
-      throw new Error(`${source.label} cannot fetch the synapses between two neuron sets`)
+      throw new Error(cannotFetchBetween(source.label))
     }
     const limit = Number(ctx.params.limit)
     const cost = 'These arrive in one query, but it returns a row per synapse connection.'

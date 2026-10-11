@@ -70,7 +70,11 @@ import {
   connectivitySchemaWithEdgeProperties,
   connectivitySchemaWithRoi,
   SYNAPSE_TOTALS_SCHEMA,
-  SYNAPSES_BETWEEN_SCHEMA,
+  drawnEnd,
+  numberOrNull,
+  partnerPositions,
+  synapsesBetweenSchema,
+  synapsesBetweenTable,
   asksForNoSynapses,
   ROI_CONNECTIVITY_SCHEMA,
   ROI_MESH_SCHEMA,
@@ -1535,7 +1539,7 @@ export class NeuPrintSource implements DataSource {
       return {
         kind: 'points',
         positions: new Float32Array(0),
-        attributes: emptyTable(SYNAPSES_BETWEEN_SCHEMA),
+        attributes: emptyTable(synapsesBetweenSchema(req.location)),
         bounds: EMPTY_BOUNDS,
         ...frame,
       }
@@ -1549,14 +1553,16 @@ export class NeuPrintSource implements DataSource {
     )
     req.onProgress?.(0.7, `${response.data.length} synapses`)
 
-    // RETURN order: neuronId, type, partnerId, partnerType, x, y, z, confidence.
+    // RETURN order: neuronId, type, partnerId, partnerType, x, y, z, confidence, and under
+    // `'both'` the postsynaptic x, y, z.
     const length = response.data.length
     const positions = new Float32Array(length * 3)
+    const partner = req.location === 'both' ? partnerPositions(length) : undefined
     const neuronIds = new Array<string | null>(length)
     const types = new Array<string | null>(length)
     const partnerIds = new Array<string | null>(length)
     const partnerTypes = new Array<string | null>(length)
-    const polarities = new Array<string>(length).fill(req.location)
+    const polarities = new Array<string>(length).fill(drawnEnd(req.location))
     const confidences = new Array<number | null>(length)
     response.data.forEach((row, i) => {
       positions[i * 3] = (Number(row[4]) || 0) * scale[0]
@@ -1566,20 +1572,29 @@ export class NeuPrintSource implements DataSource {
       types[i] = row[1] === null || row[1] === undefined ? null : String(row[1])
       partnerIds[i] = idText(row[2] as CellValue)
       partnerTypes[i] = row[3] === null || row[3] === undefined ? null : String(row[3])
-      confidences[i] = row[7] === null || row[7] === undefined ? null : Number(row[7])
+      confidences[i] = numberOrNull(row[7])
+      if (partner) {
+        for (let axis = 0; axis < 3; axis++) {
+          const v = numberOrNull(row[8 + axis])
+          partner[axis]![i] = v === null ? null : v * scale[axis]!
+        }
+      }
     })
 
     return {
       kind: 'points',
       positions,
-      attributes: makeTable(SYNAPSES_BETWEEN_SCHEMA, {
-        [ID_COLUMN_NAME]: neuronIds,
-        type: types,
-        partnerId: partnerIds,
-        partnerType: partnerTypes,
-        polarity: polarities,
-        confidence: confidences,
-      }),
+      attributes: synapsesBetweenTable(
+        {
+          [ID_COLUMN_NAME]: neuronIds,
+          type: types,
+          partnerId: partnerIds,
+          partnerType: partnerTypes,
+          polarity: polarities,
+          confidence: confidences,
+        },
+        partner,
+      ),
       bounds: boundsOf([positions]),
       ...frame,
     }
@@ -1796,7 +1811,7 @@ export class NeuPrintSource implements DataSource {
         type: row[1] === null || row[1] === undefined ? null : String(row[1]),
         instance: row[2] === null || row[2] === undefined ? null : String(row[2]),
         status: row[3] === null || row[3] === undefined ? null : String(row[3]),
-        size: row[4] === null || row[4] === undefined ? null : Number(row[4]),
+        size: numberOrNull(row[4]),
         soma: somaPoint(row[5]),
       })
     }

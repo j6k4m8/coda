@@ -42,6 +42,7 @@ import type {
   SourceCapabilities,
   SourceSchemas,
   SynapseRequest,
+  SynapseLocation,
   SynapsesBetweenRequest,
   SynapseTotalsBasis,
   SynapseTotalsRequest,
@@ -50,7 +51,9 @@ import type { Edge } from '../connectivity'
 import { matrixFromEdges } from '../connectivity'
 import {
   CANONICAL_SCHEMAS,
-  SYNAPSES_BETWEEN_SCHEMA,
+  drawnEnd,
+  partnerPositions,
+  synapsesBetweenTable,
   asksForNoSynapses,
   GROUP_TOTALS_SCHEMA,
   PATH_STEP_SCHEMA,
@@ -887,7 +890,9 @@ export class MockSource implements DataSource {
     }
 
     const positions: number[] = []
-    const rows: Array<Record<string, CellValue>> = []
+    const pres: number[] = []
+    const posts: number[] = []
+    const partner = req.location === 'both' ? partnerPositions(0) : undefined
     /*
      * Walked from whichever end is bound: every outgoing edge of the sources, kept when the
      * target end is open or names the edge's post; or, with only targets, every incoming edge.
@@ -906,33 +911,45 @@ export class MockSource implements DataSource {
           edges.push(...(connectome.in.get(post) ?? []))
       }
     }
+    // One end of synapse `k` of an edge, on that end's own arbour — the same point whichever
+    // `location` asked for it, so a `'both'` row is the `'pre'` row with the `'post'` point beside.
+    const endOf = (edge: MockConnection, k: number, end: SynapseLocation) => {
+      const post = end === 'post'
+      const other = post ? edge.pre : edge.post
+      return synapsePosition(
+        skeletonOf(post ? edge.post : edge.pre),
+        (other % 65521) * 64 + k,
+        end,
+      )
+    }
+    const drawn = drawnEnd(req.location)
     for (const edge of edges) {
       throwIfAborted(req.signal)
-      const drawnOn = req.location === 'post' ? edge.post : edge.pre
-      const other = req.location === 'post' ? edge.pre : edge.post
       for (let k = 0; k < edge.weight; k++) {
-        const [x, y, z] = synapsePosition(
-          skeletonOf(drawnOn),
-          (other % 65521) * 64 + k,
-          req.location,
-        )
+        const [x, y, z] = endOf(edge, k, drawn)
         positions.push(x, y, z)
-        rows.push({
-          [ID_COLUMN_NAME]: publishedId(edge.pre),
-          type: connectome.byId.get(edge.pre)?.type ?? null,
-          partnerId: publishedId(edge.post),
-          partnerType: connectome.byId.get(edge.post)?.type ?? null,
-          polarity: req.location,
-          confidence: null,
-        })
+        pres.push(edge.pre)
+        posts.push(edge.post)
+        if (partner) endOf(edge, k, 'post').forEach((v, axis) => partner[axis]!.push(v))
       }
     }
 
     const buffer = Float32Array.from(positions)
+    const typeOf = (id: number) => connectome.byId.get(id)?.type ?? null
     return {
       kind: 'points',
       positions: buffer,
-      attributes: tableFromRows(SYNAPSES_BETWEEN_SCHEMA, rows),
+      attributes: synapsesBetweenTable(
+        {
+          [ID_COLUMN_NAME]: pres.map(publishedId),
+          type: pres.map(typeOf),
+          partnerId: posts.map(publishedId),
+          partnerType: posts.map(typeOf),
+          polarity: new Array<string>(pres.length).fill(drawn),
+          confidence: new Array<null>(pres.length).fill(null),
+        },
+        partner,
+      ),
       bounds: boundsOf([buffer]),
       ...this.frame(req.datasetId),
     }

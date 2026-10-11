@@ -11,7 +11,8 @@ import { beforeAll, describe, expect, it } from 'vitest'
 
 import { boundsOf, signedVolume, skeletonPointCount } from '../../core/values'
 import { SYNAPSE_UNITS } from '../synapseUnits'
-import { registerSource } from '../source'
+import type { SynapseDraw } from '../source'
+import { PARTNER_POSITION_COLUMNS, registerSource, synapsesBetweenSchema } from '../source'
 import { MockSource, skeletonRois } from './MockSource'
 import { getConnectome } from './generate'
 import {
@@ -117,6 +118,24 @@ describe('MockSource synapses between', () => {
     expect(post.attributes.data.partnerId).toEqual(pre.attributes.data.partnerId)
     expect(new Set(post.attributes.data.polarity)).toEqual(new Set(['post']))
     expect([...post.positions]).not.toEqual([...pre.positions])
+  })
+
+  it('draws the presynaptic end under both, with the postsynaptic one beside it row for row', async () => {
+    const ask = (location: SynapseDraw) =>
+      source.fetchSynapsesBetween({
+        datasetId: 'optic-lobe-mini',
+        sourceIds: sources,
+        targetIds: targets,
+        location,
+      })
+    const [pre, post, both] = await Promise.all([ask('pre'), ask('post'), ask('both')])
+    expect(both.attributes.schema).toEqual(synapsesBetweenSchema('both'))
+    expect([...both.positions]).toEqual([...pre.positions])
+    expect(new Set(both.attributes.data.polarity)).toEqual(new Set(['pre']))
+    const partner = PARTNER_POSITION_COLUMNS.map((c) => both.attributes.data[c]!)
+    // The partner columns are f64 and the positions f32, so compare at the positions' precision.
+    const interleaved = partner[0]!.flatMap((_, row) => partner.map((axis) => axis[row]))
+    expect(interleaved.map((v) => Math.fround(Number(v)))).toEqual([...post.positions])
   })
 })
 

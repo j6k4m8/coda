@@ -538,6 +538,42 @@ describe.skipIf(!RUNNABLE)('against the real API', () => {
   )
 
   it(
+    'splits the skeletons before counting connections by compartment',
+    async () => {
+      /*
+       * Connection Compartments' `Skeletons` port reads a split, which only Split Axon/Dendrite
+       * writes — and `T.skeletons()` accepts any skeletons, so a plan wiring a bare Skeletons
+       * node applies cleanly and counts every synapse as unsplit. `producedBy` on the port is
+       * the declaration under test. Printed rather than only asserted, for counting over runs:
+       * the second half (skeletons fetched for Connectivity's `Neuron Set`, so both ends of
+       * every edge are covered) is reported but not required.
+       */
+      const { graph } = await ask(
+        datasetStart(),
+        'Find the LC4 neurons, get their downstream connections, and count the synapses of ' +
+          'each connection by the compartment at either end — axon or dendrite.',
+      )
+      console.log(`\n${describeGraph(graph)}\n`)
+      const typeOf = (id: string) => graph.nodes.find((n) => n.id === id)?.type
+      const into = (id: string, port: string) =>
+        graph.edges.find((e) => e.target === id && e.targetHandle === port)
+      const cc = graph.nodes.find((n) => n.type === 'connectome:connectionCompartments')
+      const feed = cc && into(cc.id, 'skeletons')
+      const split =
+        feed && typeOf(feed.source) === 'neuron.splitCompartments' ? feed.source : ''
+      const skeletons = split ? into(split, 'skeletons') : undefined
+      const named = skeletons ? into(skeletons.source, 'neurons') : undefined
+      console.log(
+        `  COMPARTMENTS: node=${Boolean(cc)} split=${Boolean(split)} ` +
+          `skeletonsFor=${named ? `${typeOf(named.source)}:${named.sourceHandle}` : '-'}`,
+      )
+      expect(cc, 'a Connection Compartments node was added').toBeDefined()
+      expect(split, 'its Skeletons come from Split Axon/Dendrite').not.toBe('')
+    },
+    PER_QUESTION_MS,
+  )
+
+  it(
     'names a row count n when the request is for a count',
     async () => {
       /*

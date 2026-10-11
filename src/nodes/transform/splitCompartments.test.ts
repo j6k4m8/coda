@@ -18,9 +18,9 @@ import { isPointsValue, isSkeletonsValue, isTableValue } from '../../core/values
 import { MockSource } from '../../data/mock/MockSource'
 import { getConnectome } from '../../data/mock/generate'
 import type * as TopologyBridge from '../../pyodide/topology'
-import type { SplitCompartmentsRequest } from '../../pyodide/topology'
 import type { CleanSkeletonsResult } from '../../pyodide/skeletons'
 import { writeCorrection } from '../lib/splitCorrections'
+import { fakeSplit } from '../../test/splitStub'
 import '../index'
 
 vi.mock('../../pyodide/topology', async (importOriginal) => ({
@@ -56,13 +56,6 @@ async function inputs(
   }
 }
 
-/** Every node dendrite, but one per neuron axon, so a split is "ok" and labels are distinct. */
-function splitAll(request: SplitCompartmentsRequest) {
-  const compartment = new Int32Array(request.parents.length).fill(1)
-  for (let i = 0; i + 1 < request.offsets.length; i++) compartment[request.offsets[i]!] = 2
-  return Promise.resolve({ compartment, status: new Int32Array(request.offsets.length - 1) })
-}
-
 async function run(
   values: Record<string, Value | undefined>,
   params: Partial<ParamValues> = {},
@@ -89,7 +82,7 @@ async function run(
 
 beforeEach(() => {
   mockedRun.mockReset()
-  mockedRun.mockImplementation(splitAll)
+  mockedRun.mockImplementation(fakeSplit)
 })
 
 describe('neuron.splitCompartments', () => {
@@ -133,7 +126,7 @@ describe('neuron.splitCompartments', () => {
 
   it('writes synapse flow onto the arbours only when asked, as a fraction of each peak', async () => {
     mockedRun.mockImplementation((request) =>
-      splitAll(request).then((r) =>
+      fakeSplit(request).then((r) =>
         request.flow
           ? {
               ...r,
@@ -226,7 +219,7 @@ describe('neuron.splitCompartments', () => {
 
   it('says how many neurons could not be split, and points a fragmented one at Heal', async () => {
     mockedRun.mockImplementation((request) =>
-      splitAll(request).then((r) => ({ ...r, status: Int32Array.from([1, 0]) })),
+      fakeSplit(request).then((r) => ({ ...r, status: Int32Array.from([1, 0]) })),
     )
     const { skeletons, synapses } = await inputs()
     const { outputs, warnings } = await run({ skeletons, synapses })

@@ -142,6 +142,8 @@ const RELATED: readonly (readonly string[])[] = [
   ['neuron.splitCompartments', 'neuron.synapses', 'out.viewer3d'],
   ['neuron.splitCompartments', 'out.topology'],
   ['neuron.splitCompartments', 'neuron.cleanSkeletons'],
+  ['connectome:connectionCompartments', 'neuron.splitCompartments'],
+  ['connectome:connectionCompartments', 'neuron.connectivity', 'neuron.synapseEdges'],
   ['neuron.meshes', 'neuron.cleanMeshes'],
   // How alike two neurons are in shape vs. how far apart they are.
   ['neuron.distance', 'neuron.nblast'],

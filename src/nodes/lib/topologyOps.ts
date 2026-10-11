@@ -50,6 +50,7 @@ import {
   CODE_AXON,
   CODE_DENDRITE,
   CODE_LINKER,
+  boundsOf,
   cableLength,
   getColumn,
   makeTable,
@@ -560,23 +561,9 @@ export function assignSynapses(
   const post = new Uint32Array(count)
   if (count === 0 || sites.length === 0) return { nodeOf, pre, post }
 
-  const cell = gridCell(distances)
-  const grid = new Map<number, number[]>()
-
-  for (let i = 0; i < count; i++) {
-    const k = cellKeyAt(
-      skeleton.positions[i * 3]!,
-      skeleton.positions[i * 3 + 1]!,
-      skeleton.positions[i * 3 + 2]!,
-      cell,
-    )
-    const bucket = grid.get(k)
-    if (bucket) bucket.push(i)
-    else grid.set(k, [i])
-  }
-
+  const locate = nodeLocator(skeleton, distances)
   sites.forEach((site, s) => {
-    const best = nearest(skeleton, grid, cell, site.x, site.y, site.z)
+    const best = locate(site.x, site.y, site.z)
     nodeOf[s] = best
     if (best < 0) return
     /*
@@ -591,6 +578,83 @@ export function assignSynapses(
   })
 
   return { nodeOf, pre, post }
+}
+
+/**
+ * The nearest node of one skeleton to any point, with the grid built once — what `assignSynapses`
+ * and `classifySynapses` search. -1 for a skeleton with no nodes, or for no node within `maxSq` (a
+ * squared distance) where one is given — which also bounds the search: within the radius it is
+ * exact, falling back to a scan of every node where the grid would cost more; without a radius it
+ * stops 64 rings out.
+ */
+export function nodeLocator(
+  skeleton: SkeletonGeometry,
+  distances = parentDistances(skeleton),
+): (x: number, y: number, z: number, maxSq?: number) => number {
+  const count = skeleton.parents.length
+  if (count === 0) return () => -1
+  const cell = gridCell(distances)
+  const grid = new Map<number, number[]>()
+  for (let i = 0; i < count; i++) {
+    const k = cellKeyAt(
+      skeleton.positions[i * 3]!,
+      skeleton.positions[i * 3 + 1]!,
+      skeleton.positions[i * 3 + 2]!,
+      cell,
+    )
+    const bucket = grid.get(k)
+    if (bucket) bucket.push(i)
+    else grid.set(k, [i])
+  }
+  const box = boundsOf([skeleton.positions])
+  // How many rings a search may walk before scanning every node is the cheaper walk: the outermost
+  // ring walked, `affordable - 1`, spans `2 · affordable - 1` cells a side, and past `cbrt(count)`
+  // a side the cube holds more cells than there are nodes.
+  const affordable = Math.max(1, Math.floor((Math.cbrt(count) + 1) / 2))
+  return (x, y, z, maxSq) => {
+    if (maxSq === undefined) return nearest(skeleton, grid, cell, x, y, z)
+    // A point further than the radius from the skeleton's box is further from every node in it.
+    const dx = Math.max(box.min[0] - x, 0, x - box.max[0])
+    const dy = Math.max(box.min[1] - y, 0, y - box.max[1])
+    const dz = Math.max(box.min[2] - z, 0, z - box.max[2])
+    if (dx * dx + dy * dy + dz * dz > maxSq) return -1
+    /*
+     * Walked out only as far as is cheaper than a scan, and trusted only where that is far enough.
+     * Sizing the walk to the whole radius instead sent nearly every lookup to the scan: a 10 µm
+     * snap is dozens of rings, while a synapse's nearest node is usually within the first one or two.
+     */
+    const reach = ringsFor(maxSq, cell)
+    if (reach <= affordable) return nearest(skeleton, grid, cell, x, y, z, maxSq, reach)
+    const node = nearest(skeleton, grid, cell, x, y, z, maxSq, affordable)
+    // A hit within the rings walked is the nearest: anything nearer would have been in them.
+    if (node >= 0 && distanceSq(skeleton, node, x, y, z) <= ((affordable - 1) * cell) ** 2) {
+      return node
+    }
+    return nearestByScan(skeleton, x, y, z, maxSq)
+  }
+}
+
+/**
+ * Nearest node within `maxSq` by checking every one, or -1: `nearest`, for a radius wider than the
+ * grid pays for.
+ */
+function nearestByScan(
+  skeleton: SkeletonGeometry,
+  x: number,
+  y: number,
+  z: number,
+  maxSq: number,
+): number {
+  let best = -1
+  let bestDist = maxSq
+  for (let i = 0; i < skeleton.parents.length; i++) {
+    const d = distanceSq(skeleton, i, x, y, z)
+    if (d <= bestDist) {
+      bestDist = d
+      best = i
+    }
+  }
+  return best
 }
 
 /**
@@ -647,7 +711,25 @@ function cellKeyAt(x: number, y: number, z: number, cell: number): number {
   return cellKey(Math.floor(x / cell), Math.floor(y / cell), Math.floor(z / cell))
 }
 
-/** Nearest node to a point, searching outward from its own cell until one is found. */
+/** The rings that cover a squared radius: a node in ring `r` is at least `(r - 1) * cell` away. */
+const ringsFor = (maxSq: number, cell: number): number => Math.ceil(Math.sqrt(maxSq) / cell) + 2
+
+/** Squared distance from node `i` to a point. */
+function distanceSq(
+  skeleton: SkeletonGeometry,
+  i: number,
+  x: number,
+  y: number,
+  z: number,
+): number {
+  const p = skeleton.positions
+  return (p[i * 3]! - x) ** 2 + (p[i * 3 + 1]! - y) ** 2 + (p[i * 3 + 2]! - z) ** 2
+}
+
+/**
+ * Nearest node to a point, searching outward from its own cell until one is found — or, given a
+ * squared radius, answering -1 for nothing inside it — over at most `rings` rings.
+ */
 function nearest(
   skeleton: SkeletonGeometry,
   grid: ReadonlyMap<number, number[]>,
@@ -655,6 +737,8 @@ function nearest(
   x: number,
   y: number,
   z: number,
+  maxSq = Infinity,
+  rings = 64,
 ): number {
   const cx = Math.floor(x / cell)
   const cy = Math.floor(y / cell)
@@ -662,7 +746,7 @@ function nearest(
   let best = -1
   let bestDist = Infinity
 
-  for (let ring = 0; ring < 64; ring++) {
+  for (let ring = 0; ring < rings; ring++) {
     for (let dx = -ring; dx <= ring; dx++) {
       for (let dy = -ring; dy <= ring; dy++) {
         for (let dz = -ring; dz <= ring; dz++) {
@@ -671,10 +755,7 @@ function nearest(
           const bucket = grid.get(cellKey(cx + dx, cy + dy, cz + dz))
           if (!bucket) continue
           for (const i of bucket) {
-            const d =
-              (skeleton.positions[i * 3]! - x) ** 2 +
-              (skeleton.positions[i * 3 + 1]! - y) ** 2 +
-              (skeleton.positions[i * 3 + 2]! - z) ** 2
+            const d = distanceSq(skeleton, i, x, y, z)
             if (d < bestDist) {
               bestDist = d
               best = i
@@ -688,9 +769,9 @@ function nearest(
      * can be further away than one sitting just inside the next — the classic grid-search
      * off-by-one, and it produces a plausible wrong answer rather than a visible failure.
      */
-    if (best >= 0 && bestDist <= (ring * cell) ** 2) return best
+    if (best >= 0 && bestDist <= (ring * cell) ** 2) return bestDist <= maxSq ? best : -1
   }
-  return best
+  return bestDist <= maxSq ? best : -1
 }
 
 /* ------------------------------------------------------------------------------------------

@@ -420,6 +420,8 @@ export function emptySynapsesBetween(): PointsValue {
  * say which end that is. Writing the `location` asked for would be a column claiming a move that
  * never happened; the caller says so through `onWarn`. `confidence` is empty for the same reason
  * the synapse schema has no score. Types come from the neuron table, null where it has none.
+ * `location: 'both'` gets no partner columns for the same reason, their absence being how a caller
+ * tells (`SynapseDraw`).
  */
 export async function synapsesBetween(
   table: SynapseTable,

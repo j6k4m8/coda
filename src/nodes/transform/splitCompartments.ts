@@ -25,7 +25,6 @@ import { T, columnNames } from '../../core/types'
 import type { PointsValue, SkeletonsValue } from '../../core/values'
 import { isPointsValue, isSkeletonsValue } from '../../core/values'
 import { memoPromise, untilAborted } from '../../data/memoPromise'
-import { checkGeometryUnits } from '../../data/units'
 import type { NeuronSynapses, SetSplit, SplitSettings } from '../lib/compartmentOps'
 import { parentDistances } from '../lib/topologyOps'
 import {
@@ -33,6 +32,7 @@ import {
   labelSynapses,
   labelledSynapsesSchema,
   readSplitSettings,
+  requireSynapseFrame,
   sitesByNeuron,
   splitParams,
   splitSkeletons,
@@ -43,7 +43,6 @@ import {
 } from '../lib/compartmentOps'
 import type { SplitCorrection } from '../lib/splitCorrections'
 import { CORRECTIONS_PARAM, readCorrections } from '../lib/splitCorrections'
-import { frameClash, frameClashMessage } from '../lib/transformOps'
 import { healSkeleton } from '../lib/arborHeal'
 
 /**
@@ -109,8 +108,6 @@ async function automaticSplit(
   return { synapses, split: await untilAborted(split, run.signal) }
 }
 
-/** What a frame mismatch does to the split, whichever axis it is on. */
-const SNAP_ANYWHERE = 'Every synapse would snap to whichever node happened to be nearest.'
 /**
  * The skeletons corrections are applied on: each split neuron that carries a correction and arrived
  * in pieces, joined — it was healed to be split at all, and an arbour built from the delivered
@@ -258,19 +255,7 @@ registerNode({
           'both polarities.',
       )
     }
-    const consequence = 'a synapse cannot be placed on the skeleton it belongs to.'
-    checkGeometryUnits('The', skeletons, 'skeletons', 'Skeletons', consequence)
-    checkGeometryUnits('The', points, 'synapses', 'Synapses', consequence)
-    const clash = frameClash(skeletons, points)
-    if (clash) {
-      throw new Error(
-        frameClashMessage(
-          clash,
-          { left: 'The skeletons', right: 'the synapses' },
-          { units: SNAP_ANYWHERE, space: SNAP_ANYWHERE },
-        ),
-      )
-    }
+    requireSynapseFrame(skeletons, points)
 
     const automatic = await automaticSplit(
       skeletons,

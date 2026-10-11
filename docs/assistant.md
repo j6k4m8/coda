@@ -286,11 +286,22 @@ Rendered at `lean` as well as `full`, per that level's rule: a fact a plan can b
 what a setting means. Both halves are checked against the registry by a test rather than by
 `registerNode`, since a producer may register after its consumer.
 
+**A second member, measured the same way.** Connection Compartments' `Skeletons` port reads a split
+that only Split Axon/Dendrite writes, and `T.skeletons()` accepts any skeletons, so a bare Skeletons
+node wired straight in applies cleanly and counts every synapse as unsplit. Asked to *count each
+connection's synapses by the compartment at either end*, `gemma4:31b-cloud` at `lean` added the
+node every time and split first **0/5** without the line, **8/10** with
+`producedBy: { type: 'neuron.splitCompartments', port: 'out' }` (`live.test.ts`, *splits the skeletons
+before counting connections by compartment*). The second half came free: in all eight, the split's
+skeletons were fetched for Connectivity's `Neuron Set`, so both ends of every edge were covered —
+nothing in the prompt says so.
+
 It is a `{ type, port? }` pair rather than a bare type, and `port` defaults to this port's own id.
-The bare form looked sufficient on the only member that exists — and cannot express the obvious
-second one: `neuron.partnerVectors` wants the same declaration on a port called `labels`, fed by
-`compare.matchTypes`' `labels1`. **That second member is deliberately not declared yet**, because
-every number on this page was measured and that one has not been.
+The bare form looked sufficient on the first member — and cannot express two others: Connection
+Compartments' port is fed by an output called `out`, and `neuron.partnerVectors` wants the same
+declaration on a port called `labels`, fed by `compare.matchTypes`' `labels1`. **That last one is
+deliberately not declared yet**, because every number on this page was measured and that one has
+not been.
 
 **A second line borrows that shape, and is deliberately labelled unmeasured.**
 `PortDef.exclusiveGroup` says that a node's optional inputs are *alternatives* rather than a set

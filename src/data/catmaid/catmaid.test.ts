@@ -37,6 +37,7 @@ import {
   setInstances,
 } from './credentials'
 import { parseX3dMesh } from './x3d'
+import { SYNAPSES_BETWEEN_SCHEMA } from '../source'
 
 const SERVER = 'https://catmaid.example.org'
 const annotations = annotationListFixture as unknown as AnnotationListResponse
@@ -733,6 +734,18 @@ describe('synapses between', () => {
     })
     expect(post.attributes.data.confidence).toEqual([4, 5, 5])
     expect(post.attributes.data.polarity).toEqual(['post', 'post', 'post'])
+  })
+
+  it('answers both with the one connector and no partner columns, for the caller to read', async () => {
+    stubFetch(routes)
+    const both = await source().fetchSynapsesBetween({
+      datasetId: '1',
+      sourceIds: ['16'],
+      targetIds: ['430', '6582'],
+      location: 'both',
+    })
+    expect(both.attributes.schema).toEqual(SYNAPSES_BETWEEN_SCHEMA)
+    expect(both.attributes.data.polarity).toEqual(['pre', 'pre', 'pre'])
   })
 })
 

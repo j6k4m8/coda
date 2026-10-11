@@ -224,6 +224,39 @@ const EXAMPLES: readonly ExampleSpec[] = [
   },
 
   {
+    types: ['connectome:connectionCompartments'],
+    focus: 'compartments',
+    title: 'Connection Compartments',
+    about:
+      'The T4a neurons’ outgoing connections, with each connection’s synapses counted by the compartment at either end: axo-dendritic, axo-axonic and so on. **Split Axon/Dendrite** labels the skeletons first, and the skeletons are fetched for Connectivity’s **Neuron Set**, so the neurons at both ends of every edge are split.\n\n' +
+      'Set **Layout** to “long” for one row per class, or colour a 3D View of the **Synapses** output by `connection`.',
+    cards: [
+      DS,
+      find('find', typeIs('T4a')),
+      {
+        id: 'conn',
+        type: 'neuron.connectivity',
+        params: { direction: 'outputs', minWeight: 3 },
+      },
+      { id: 'skel', type: 'neuron.skeletons' },
+      { id: 'syn', type: 'neuron.synapses', row: UNDER_TALL },
+      { id: 'split', type: 'neuron.splitCompartments' },
+      { id: 'compartments', type: 'connectome:connectionCompartments' },
+      { id: 'table', type: 'out.table' },
+    ],
+    wires: [
+      ['find', 'neurons', 'conn', 'neurons'],
+      ['conn', 'neuronSet', 'skel', 'neurons'],
+      ['conn', 'neuronSet', 'syn', 'neurons'],
+      ['skel', 'skeletons', 'split', 'skeletons'],
+      ['syn', 'points', 'split', 'synapses'],
+      ['conn', 'connections', 'compartments', 'edges'],
+      ['split', 'out', 'compartments', 'skeletons'],
+      ['compartments', 'edges', 'table', 'in'],
+    ],
+  },
+
+  {
     types: ['neuron.pointsInVolumes'],
     focus: 'inside',
     title: 'Points in Volumes',

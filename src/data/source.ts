@@ -20,6 +20,8 @@
 import type { ColumnSchema, DType, PopulationFilter, TableSchema } from '../core/types'
 import { column, tableSchema } from '../core/types'
 import type {
+  CellValue,
+  ColumnData,
   DatasetAnnotations,
   DatasetEdges,
   AdjacencyMatrix,
@@ -38,7 +40,7 @@ import type { FilterRow } from './filterRows'
 
 export type { NeuronIndexRequest } from './neuronIndex'
 
-import { boundsOf, meshTriangleCount } from '../core/values'
+import { boundsOf, makeTable, meshTriangleCount } from '../core/values'
 import type { NeuronId } from '../core/ids'
 import { ID_COLUMN_NAME } from '../core/ids'
 import { achievedDownsample, applyReduction, reductionFor } from './meshDecimate'
@@ -606,6 +608,24 @@ export interface SynapseLinksRequest extends GeometryRequest {
 export type SynapseLocation = 'pre' | 'post'
 
 /**
+ * What a synapses-between request asks to be drawn: one end, or `'both'` — the point at the
+ * presynaptic site and the postsynaptic one beside it in `PARTNER_POSITION_COLUMNS`.
+ *
+ * `'both'` exists for a question about *each* end, which compartment of which neuron it sits on.
+ * One coordinate for two arbours is right most of the time and wrong exactly where an axon and a
+ * dendrite interdigitate, which is the case such a question is about. **A source with one
+ * position per synapse answers it with that one and no partner columns** (CATMAID's connector,
+ * a Custom table), so the caller reads the columns' absence rather than a capability: which ends
+ * arrived is a fact about the value.
+ */
+export type SynapseDraw = SynapseLocation | 'both'
+
+/** The end a point is drawn at for a request — `'both'` draws the presynaptic one. */
+export function drawnEnd(location: SynapseDraw): SynapseLocation {
+  return location === 'post' ? 'post' : 'pre'
+}
+
+/**
  * Every synapse from one neuron set onto another — neuprint-python's `fetch_synapse_connections`.
  *
  * **Directed, and bound at whichever ends are given.** `sourceIds` are presynaptic and `targetIds`
@@ -633,7 +653,7 @@ export interface SynapsesBetweenRequest extends DatasetRequest {
   /** Postsynaptic neurons, or absent for any — every synapse `sourceIds` make. */
   targetIds?: NeuronId[]
   /** Which end's coordinate each point takes. Required: it decides what is drawn. */
-  location: SynapseLocation
+  location: SynapseDraw
   /**
    * Drop a connection when **either** synapse scores below this — `SynapseRequest.minConfidence`'s
    * scale, and both ends because that is what `fetch_synapse_connections` does (its
@@ -1636,6 +1656,53 @@ export const SYNAPSES_BETWEEN_SCHEMA: TableSchema = tableSchema(
   column('polarity', 'str'),
   column('confidence', 'f64'),
 )
+
+/**
+ * The postsynaptic site of a `location: 'both'` row, in the cloud's own nanometres — `partner`
+ * because `partnerId` is the postsynaptic neuron on this schema. Last, so every column of
+ * `SYNAPSES_BETWEEN_SCHEMA` keeps its position.
+ */
+export const PARTNER_POSITION_COLUMNS = ['partnerX', 'partnerY', 'partnerZ'] as const
+
+const SYNAPSES_BETWEEN_BOTH_SCHEMA: TableSchema = tableSchema(
+  ...SYNAPSES_BETWEEN_SCHEMA.columns,
+  ...PARTNER_POSITION_COLUMNS.map((name) => column(name, 'f64', 'nm')),
+)
+
+/** The partner end's x, y and z, one entry per row, in `PARTNER_POSITION_COLUMNS` order. */
+export type PartnerPositions = readonly [CellValue[], CellValue[], CellValue[]]
+
+/** Three columns of `length` to fill row by row. */
+export function partnerPositions(length: number): PartnerPositions {
+  return [new Array(length), new Array(length), new Array(length)]
+}
+
+/**
+ * A synapses-between attribute table: the six columns, plus the partner end's position when one is
+ * handed over. The schema follows from what was handed over rather than from the request, so a
+ * source cannot pick `'both'`'s schema and leave the columns out, or the reverse.
+ */
+export function synapsesBetweenTable(
+  columns: Record<string, ColumnData>,
+  partner?: PartnerPositions,
+): TableValue {
+  if (!partner) return makeTable(SYNAPSES_BETWEEN_SCHEMA, columns)
+  const [partnerX, partnerY, partnerZ] = partner
+  return makeTable(SYNAPSES_BETWEEN_BOTH_SCHEMA, { ...columns, partnerX, partnerY, partnerZ })
+}
+
+/** A cell read off the wire as a number, keeping an absent one absent rather than 0. */
+export function numberOrNull(value: unknown): number | null {
+  return value === null || value === undefined ? null : Number(value)
+}
+
+/**
+ * The schema a source answers `location` with **when it has both ends** — one with a single
+ * position answers `'both'` with `SYNAPSES_BETWEEN_SCHEMA` (see `SynapseDraw`).
+ */
+export function synapsesBetweenSchema(location: SynapseDraw): TableSchema {
+  return location === 'both' ? SYNAPSES_BETWEEN_BOTH_SCHEMA : SYNAPSES_BETWEEN_SCHEMA
+}
 
 // ---------------------------------------------------------------------------
 // Source registry

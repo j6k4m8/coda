@@ -13,6 +13,7 @@
 import type { PackDefinition } from '../../core/registry'
 import { adjacencyNode } from './adjacency'
 import { compareConnectivityNode } from './compareConnectivity'
+import { connectionCompartmentsNode } from './connectionCompartments'
 import { connectivityNode } from './connectivity'
 import { customDatasetNode } from './customDataset'
 import { influenceNode } from './influence'
@@ -47,5 +48,6 @@ export const connectome: PackDefinition = {
     compareConnectivityNode,
     // The first node added to this pack rather than moved into it, so a `connectome:` id.
     customDatasetNode,
+    connectionCompartmentsNode,
   ],
 }

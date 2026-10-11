@@ -26,7 +26,7 @@ import type {
   SynapsesBetweenRequest,
   SynapseTotalsRequest,
 } from '../source'
-import { asksForNoSynapses, edgePropertyWeight } from '../source'
+import { asksForNoSynapses, drawnEnd, edgePropertyWeight } from '../source'
 import { isNeuronId } from '../../core/ids'
 import { SYNAPSE_UNITS } from '../synapseUnits'
 import type { PopulationFilter, TableSchema } from '../../core/types'
@@ -902,7 +902,7 @@ export function synapsesBetweenCypher(
   const sources = req.sourceIds && (render.sourceIds ?? idList(req.sourceIds))
   const targets = req.targetIds && (render.targetIds ?? idList(req.targetIds))
   const min = req.minConfidence ?? 0
-  const drawn = req.location === 'post' ? 'ms' : 'ns'
+  const drawn = drawnEnd(req.location) === 'post' ? 'ms' : 'ns'
   // Only an open end takes the label: a bound one names the bodies it wants.
   const label = render.partnerLabel ? `:${render.partnerLabel}` : ''
   const sets =
@@ -922,7 +922,9 @@ export function synapsesBetweenCypher(
     'MATCH (nss)-[:Contains]->(ns:Synapse)-[:SynapsesTo]->(ms:Synapse)<-[:Contains]-(mss)',
     ...(min > 0 ? [`WHERE ns.confidence >= ${min} AND ms.confidence >= ${min}`] : []),
     `RETURN n.bodyId, n.type, m.bodyId, m.type, ${drawn}.location.x, ${drawn}.location.y,`,
-    `       ${drawn}.location.z, ${drawn}.confidence`,
+    `       ${drawn}.location.z, ${drawn}.confidence` +
+      // Both ends are matched already; `'both'` only returns the second.
+      (req.location === 'both' ? ', ms.location.x, ms.location.y, ms.location.z' : ''),
   ].join('\n')
 }
 

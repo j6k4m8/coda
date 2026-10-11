@@ -13,6 +13,16 @@ inspector. They are different layers and the difference is not cosmetic:
 | the table cache (`loadCachedTable` → IndexedDB) | what a *server* returned | what was fetched | a month | Clear Cache, or the dataset card's ⟳ |
 | the geometry cache (`geometryCache.ts`) | one neuron's skeleton or mesh | source, dataset, id, and whatever else decides the geometry | the session | Clear Cache |
 
+One node keeps a cache of its own above the seam, and says so: **Connection Compartments** holds its
+last fetch per edge-list value (a `WeakMap`, so it goes with the table), only the rows on listed
+pairs, so moving `Layout` or `Max snap distance` does not re-fetch a cross product; beside the
+fetch it keeps the classification per skeletons value and snap distance, so a `Layout` edit does
+not re-classify either. It honours `ctx.refresh`, replays the source's warnings on a hit and
+reports its age, the contract every `dataCache` node keeps. It is not below the seam because a
+synapse cloud is not reused across nodes the way geometry is, and a cross product held per source
+for the session would cost real memory for no second reader. See
+[compartments-plan.md](compartments-plan.md).
+
 **The third exists because the first two cannot help each other.** A morphology node's key folds
 in its upstream *provenance*, so it re-runs whenever anything about its Neurons input changes —
 and re-running means re-downloading. Probed on a 12-neuron scene: widening a type pattern from

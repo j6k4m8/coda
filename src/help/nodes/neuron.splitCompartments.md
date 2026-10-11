@@ -79,14 +79,17 @@ Corrections are applied on top of the automatic split, so they still hold when y
 > leaves the labels as they were. Remove them in the full-size view.
 
 > [!NOTE] Healed skeletons
-> With `Heal fragmented skeletons` on, a correction only reaches the fragment that holds its
-> root. The full-size view draws that fragment only.
+> With `Heal fragmented skeletons` on, the full-size view draws a fragmented neuron with its
+> pieces joined, as it was split, and corrections are applied to the joined neuron. The first
+> time, it shows "Joining the skeleton’s N pieces…" while that runs.
 
 ## Outputs
 
 - `Skeletons`: the input skeletons with the split stored on them, for the 3D View's compartment colours. A neuron that could not be split has no labels.
 - `Synapses`: the input cloud with a `compartment` column (`axon`, `dendrite`, `linker`, or empty).
 - `Summary`: one row per neuron, with the skeletons' own columns first.
+
+To count each connection's synapses by the compartment at either end (axo-dendritic, axo-axonic and so on), wire `Skeletons` into [Connection Compartments](#connectome:connectionCompartments).
 
 With `Write synapse flow` on, the skeletons also carry each node's flow as a fraction of that neuron's peak. Set the 3D View's skeleton `Colour` to "by node value" to see it; everything above `Linker threshold` is linker.
 

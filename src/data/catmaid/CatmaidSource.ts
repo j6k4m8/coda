@@ -68,6 +68,7 @@ import { matrixFromEdges } from '../connectivity'
 import {
   ROI_MESH_SCHEMA,
   SYNAPSES_BETWEEN_SCHEMA,
+  drawnEnd,
   asksForNoSynapses,
   reportSourceLearned,
   requireSkeletonRoute,
@@ -894,6 +895,7 @@ export class CatmaidSource implements DataSource {
      * connector of a traced neuron, and a row object per synapse handed to `tableFromRows` is
      * that function's documented not-a-hot-path.
      */
+    const drawn = drawnEnd(req.location)
     const positions: number[] = []
     const pres: number[] = []
     const posts: number[] = []
@@ -945,14 +947,7 @@ export class CatmaidSource implements DataSource {
         for (const pre of outgoing.links) {
           if (min > 0 && pre[5] < min) continue
           for (const post of received.get(pre[1]) ?? []) {
-            add(
-              pre[0],
-              post[0],
-              req.location === 'post' ? post[5] : pre[5],
-              pre[2],
-              pre[3],
-              pre[4],
-            )
+            add(pre[0], post[0], drawn === 'post' ? post[5] : pre[5], pre[2], pre[3], pre[4])
           }
         }
       } else {
@@ -1000,7 +995,7 @@ export class CatmaidSource implements DataSource {
           }
           for (const pre of preLinks) {
             for (const post of postLinks) {
-              add(pre[2], post[2], req.location === 'post' ? post[4] : pre[4], x, y, z)
+              add(pre[2], post[2], drawn === 'post' ? post[4] : pre[4], x, y, z)
             }
           }
         }
@@ -1013,12 +1008,14 @@ export class CatmaidSource implements DataSource {
     return {
       kind: 'points',
       positions: buffer,
+      // One connector is both ends here, so `'both'` gets no partner columns: their absence is
+      // how a caller tells (`SynapseDraw`).
       attributes: makeTable(SYNAPSES_BETWEEN_SCHEMA, {
         [ID_COLUMN_NAME]: pres.map((id) => idText(id)),
         type: pres.map(typeOf),
         partnerId: posts.map((id) => idText(id)),
         partnerType: posts.map(typeOf),
-        polarity: new Array<string>(pres.length).fill(req.location),
+        polarity: new Array<string>(pres.length).fill(drawn),
         confidence: confidences,
       }),
       bounds: boundsOf([buffer]),
