@@ -11,6 +11,7 @@ import {
   reconnectEdge,
   removeNodes,
   serializeGraph,
+  setNodeCachePolicy,
   topoSort,
   wouldCreateCycle,
 } from './graph'
@@ -438,6 +439,54 @@ describe('serialisation', () => {
     // And back out through the writer the download and the shelf both use.
     const again = deserializeGraph(serializeGraph(graph)).graph
     expect(again.nodes.find((n) => n.id === 'good')?.hints).toEqual(hints['good'])
+  })
+
+  /*
+   * A cache lifetime is the reader's choice about freshness, so it travels with the file — and,
+   * like a hint, a malformed one is dropped rather than refused, and an absent one is absent.
+   */
+  it('round-trips a cache lifetime, and drops one that is not a duration', () => {
+    const node = (id: string, cache: unknown) => ({
+      id,
+      type: 'out.table',
+      position: { x: 0, y: 0 },
+      params: {},
+      cache,
+    })
+    const json = JSON.stringify({
+      version: 1,
+      nodes: [
+        node('hour', { maxAgeMs: 3_600_000 }),
+        node('never', { maxAgeMs: 0 }),
+        node('negative', { maxAgeMs: -5 }),
+        node('text', { maxAgeMs: '1h' }),
+        node('junk', 'a week'),
+        node('none', undefined),
+      ],
+      edges: [],
+    })
+    const { graph, warnings } = deserializeGraph(json)
+    const cache = Object.fromEntries(graph.nodes.map((n) => [n.id, n.cache]))
+    expect(cache['hour']).toEqual({ maxAgeMs: 3_600_000 })
+    expect(cache['never']).toEqual({ maxAgeMs: 0 })
+    for (const id of ['negative', 'text', 'junk', 'none']) {
+      expect(graph.nodes.find((n) => n.id === id)).not.toHaveProperty('cache')
+    }
+    expect(warnings).toEqual([])
+
+    const again = deserializeGraph(serializeGraph(graph)).graph
+    expect(again.nodes.find((n) => n.id === 'hour')?.cache).toEqual({ maxAgeMs: 3_600_000 })
+  })
+
+  it('sets a cache lifetime as one edit, and clears it to no field at all', () => {
+    const g = addNode(emptyGraph('t'), node('t', 'out.table'))
+    const set = setNodeCachePolicy(g, 't', { maxAgeMs: 60_000 })
+    expect(set.nodes[0]!.cache).toEqual({ maxAgeMs: 60_000 })
+    // The choice it already holds is no edit, so `commit` records no undo step.
+    expect(setNodeCachePolicy(set, 't', { maxAgeMs: 60_000 })).toBe(set)
+    const cleared = setNodeCachePolicy(set, 't', undefined)
+    expect(cleared.nodes[0]).not.toHaveProperty('cache')
+    expect(serializeGraph(cleared)).not.toContain('"cache"')
   })
 })
 

@@ -45,16 +45,19 @@ import type {
   SkeletonsValue,
   TableValue,
 } from '../../core/values'
-import type { SplitStatus } from '../../pyodide/topology'
+import type { SplitStatus } from './splitStatus'
+import { hasSplit } from './splitStatus'
 import {
   CODE_AXON,
   CODE_DENDRITE,
   CODE_LINKER,
+  boundsOf,
   cableLength,
   getColumn,
   makeTable,
 } from '../../core/values'
 import { NM_PER_UM } from '../../data/units'
+import { widestSomaNode } from '../../data/soma'
 import { packPositions, packSkeletons } from './skeletonPacking'
 
 /**
@@ -256,7 +259,7 @@ export function segmentStats(
 }
 
 /**
- * The longest root-to-tip path, in the skeleton's own units.
+ * The longest soma-to-tip path, in the skeleton's own units — `rootDistances`' largest.
  *
  * Deliberately *not* fastcore's `longest_path`, which is the longest path between any two nodes
  * and therefore crosses the root — for a neuron that means "widest tip to widest tip", where what
@@ -273,18 +276,43 @@ export function maxRootDistance(
   return max
 }
 
-/** Path length from its root to every node, in the skeleton's own units. */
+/**
+ * Path length to every node from its soma, in the skeleton's own units.
+ *
+ * Measured from `widestSomaNode` across the soma's own fragment, in both directions along the
+ * cable, so a skeleton that arrived rooted somewhere else — neuPrint's SWC starts wherever the
+ * file does — still measures from its cell body. Every other fragment, and every fragment of a
+ * skeleton with no soma labelled, measures from its own root.
+ */
 export function rootDistances(
   skeleton: SkeletonGeometry,
   tree = skeletonTree(skeleton),
   distances = parentDistances(skeleton),
 ): Float64Array {
-  const depth = new Float64Array(skeleton.parents.length)
-  // Pre-order: a parent's depth is always resolved before its children are read.
+  const { parents } = skeleton
+  const n = parents.length
+  const depth = new Float64Array(n)
+  const seen = new Uint8Array(n)
+  /*
+   * One undirected walk — up through a parent as well as down through children, `buildArbor`'s
+   * walk without the arbor. The soma goes on the stack last so it is taken first, and its whole
+   * fragment is finished before that fragment's own root comes off the stack, already seen. A
+   * node's depth is set when it is pushed, from the node it was reached across.
+   */
   const stack = [...tree.roots]
+  const soma = widestSomaNode(skeleton)
+  if (soma >= 0) stack.push(soma)
   while (stack.length > 0) {
     const i = stack.pop()!
+    if (seen[i]) continue
+    seen[i] = 1
+    const parent = parents[i]!
+    if (parent >= 0 && parent < n && !seen[parent]) {
+      depth[parent] = depth[i]! + distances[i]!
+      stack.push(parent)
+    }
     for (const child of tree.children[i]!) {
+      if (seen[child]) continue
       depth[child] = depth[i]! + distances[child]!
       stack.push(child)
     }
@@ -534,23 +562,9 @@ export function assignSynapses(
   const post = new Uint32Array(count)
   if (count === 0 || sites.length === 0) return { nodeOf, pre, post }
 
-  const cell = gridCell(distances)
-  const grid = new Map<number, number[]>()
-
-  for (let i = 0; i < count; i++) {
-    const k = cellKeyAt(
-      skeleton.positions[i * 3]!,
-      skeleton.positions[i * 3 + 1]!,
-      skeleton.positions[i * 3 + 2]!,
-      cell,
-    )
-    const bucket = grid.get(k)
-    if (bucket) bucket.push(i)
-    else grid.set(k, [i])
-  }
-
+  const locate = nodeLocator(skeleton, distances)
   sites.forEach((site, s) => {
-    const best = nearest(skeleton, grid, cell, site.x, site.y, site.z)
+    const best = locate(site.x, site.y, site.z)
     nodeOf[s] = best
     if (best < 0) return
     /*
@@ -565,6 +579,83 @@ export function assignSynapses(
   })
 
   return { nodeOf, pre, post }
+}
+
+/**
+ * The nearest node of one skeleton to any point, with the grid built once — what `assignSynapses`
+ * and `classifySynapses` search. -1 for a skeleton with no nodes, or for no node within `maxSq` (a
+ * squared distance) where one is given — which also bounds the search: within the radius it is
+ * exact, falling back to a scan of every node where the grid would cost more; without a radius it
+ * stops 64 rings out.
+ */
+export function nodeLocator(
+  skeleton: SkeletonGeometry,
+  distances = parentDistances(skeleton),
+): (x: number, y: number, z: number, maxSq?: number) => number {
+  const count = skeleton.parents.length
+  if (count === 0) return () => -1
+  const cell = gridCell(distances)
+  const grid = new Map<number, number[]>()
+  for (let i = 0; i < count; i++) {
+    const k = cellKeyAt(
+      skeleton.positions[i * 3]!,
+      skeleton.positions[i * 3 + 1]!,
+      skeleton.positions[i * 3 + 2]!,
+      cell,
+    )
+    const bucket = grid.get(k)
+    if (bucket) bucket.push(i)
+    else grid.set(k, [i])
+  }
+  const box = boundsOf([skeleton.positions])
+  // How many rings a search may walk before scanning every node is the cheaper walk: the outermost
+  // ring walked, `affordable - 1`, spans `2 · affordable - 1` cells a side, and past `cbrt(count)`
+  // a side the cube holds more cells than there are nodes.
+  const affordable = Math.max(1, Math.floor((Math.cbrt(count) + 1) / 2))
+  return (x, y, z, maxSq) => {
+    if (maxSq === undefined) return nearest(skeleton, grid, cell, x, y, z)
+    // A point further than the radius from the skeleton's box is further from every node in it.
+    const dx = Math.max(box.min[0] - x, 0, x - box.max[0])
+    const dy = Math.max(box.min[1] - y, 0, y - box.max[1])
+    const dz = Math.max(box.min[2] - z, 0, z - box.max[2])
+    if (dx * dx + dy * dy + dz * dz > maxSq) return -1
+    /*
+     * Walked out only as far as is cheaper than a scan, and trusted only where that is far enough.
+     * Sizing the walk to the whole radius instead sent nearly every lookup to the scan: a 10 µm
+     * snap is dozens of rings, while a synapse's nearest node is usually within the first one or two.
+     */
+    const reach = ringsFor(maxSq, cell)
+    if (reach <= affordable) return nearest(skeleton, grid, cell, x, y, z, maxSq, reach)
+    const node = nearest(skeleton, grid, cell, x, y, z, maxSq, affordable)
+    // A hit within the rings walked is the nearest: anything nearer would have been in them.
+    if (node >= 0 && distanceSq(skeleton, node, x, y, z) <= ((affordable - 1) * cell) ** 2) {
+      return node
+    }
+    return nearestByScan(skeleton, x, y, z, maxSq)
+  }
+}
+
+/**
+ * Nearest node within `maxSq` by checking every one, or -1: `nearest`, for a radius wider than the
+ * grid pays for.
+ */
+function nearestByScan(
+  skeleton: SkeletonGeometry,
+  x: number,
+  y: number,
+  z: number,
+  maxSq: number,
+): number {
+  let best = -1
+  let bestDist = maxSq
+  for (let i = 0; i < skeleton.parents.length; i++) {
+    const d = distanceSq(skeleton, i, x, y, z)
+    if (d <= bestDist) {
+      bestDist = d
+      best = i
+    }
+  }
+  return best
 }
 
 /**
@@ -621,7 +712,25 @@ function cellKeyAt(x: number, y: number, z: number, cell: number): number {
   return cellKey(Math.floor(x / cell), Math.floor(y / cell), Math.floor(z / cell))
 }
 
-/** Nearest node to a point, searching outward from its own cell until one is found. */
+/** The rings that cover a squared radius: a node in ring `r` is at least `(r - 1) * cell` away. */
+const ringsFor = (maxSq: number, cell: number): number => Math.ceil(Math.sqrt(maxSq) / cell) + 2
+
+/** Squared distance from node `i` to a point. */
+function distanceSq(
+  skeleton: SkeletonGeometry,
+  i: number,
+  x: number,
+  y: number,
+  z: number,
+): number {
+  const p = skeleton.positions
+  return (p[i * 3]! - x) ** 2 + (p[i * 3 + 1]! - y) ** 2 + (p[i * 3 + 2]! - z) ** 2
+}
+
+/**
+ * Nearest node to a point, searching outward from its own cell until one is found — or, given a
+ * squared radius, answering -1 for nothing inside it — over at most `rings` rings.
+ */
 function nearest(
   skeleton: SkeletonGeometry,
   grid: ReadonlyMap<number, number[]>,
@@ -629,6 +738,8 @@ function nearest(
   x: number,
   y: number,
   z: number,
+  maxSq = Infinity,
+  rings = 64,
 ): number {
   const cx = Math.floor(x / cell)
   const cy = Math.floor(y / cell)
@@ -636,7 +747,7 @@ function nearest(
   let best = -1
   let bestDist = Infinity
 
-  for (let ring = 0; ring < 64; ring++) {
+  for (let ring = 0; ring < rings; ring++) {
     for (let dx = -ring; dx <= ring; dx++) {
       for (let dy = -ring; dy <= ring; dy++) {
         for (let dz = -ring; dz <= ring; dz++) {
@@ -645,10 +756,7 @@ function nearest(
           const bucket = grid.get(cellKey(cx + dx, cy + dy, cz + dz))
           if (!bucket) continue
           for (const i of bucket) {
-            const d =
-              (skeleton.positions[i * 3]! - x) ** 2 +
-              (skeleton.positions[i * 3 + 1]! - y) ** 2 +
-              (skeleton.positions[i * 3 + 2]! - z) ** 2
+            const d = distanceSq(skeleton, i, x, y, z)
             if (d < bestDist) {
               bestDist = d
               best = i
@@ -662,9 +770,9 @@ function nearest(
      * can be further away than one sitting just inside the next — the classic grid-search
      * off-by-one, and it produces a plausible wrong answer rather than a visible failure.
      */
-    if (best >= 0 && bestDist <= (ring * cell) ** 2) return best
+    if (best >= 0 && bestDist <= (ring * cell) ** 2) return bestDist <= maxSq ? best : -1
   }
-  return best
+  return bestDist <= maxSq ? best : -1
 }
 
 /* ------------------------------------------------------------------------------------------
@@ -681,10 +789,14 @@ export interface CompartmentStats {
   readonly cableAxon: number
   readonly cableDendrite: number
   readonly cableLinker: number
-  readonly preAxon: number
-  readonly postAxon: number
-  readonly preDendrite: number
-  readonly postDendrite: number
+  /**
+   * Synapses per compartment; null where none were placed on the skeleton (a split by ROI or by tag
+   * with no Synapses wired), which is not counted rather than counted as none.
+   */
+  readonly preAxon: number | null
+  readonly postAxon: number | null
+  readonly preDendrite: number | null
+  readonly postDendrite: number | null
   /** `segregationIndex` over the axon and the dendrite; null where it is undefined. */
   readonly segregationIndex: number | null
 }
@@ -716,7 +828,7 @@ export function compartmentStats(
   status: SplitStatus,
   distances = parentDistances(skeleton),
 ): CompartmentStats {
-  if (!compartment || status !== 'ok') return { ...NO_SPLIT, status }
+  if (!compartment || !hasSplit(status)) return { ...NO_SPLIT, status }
   let cableAxon = 0
   let cableDendrite = 0
   let cableLinker = 0
@@ -728,28 +840,39 @@ export function compartmentStats(
     else if (code === CODE_LINKER) cableLinker += distances[i]!
   }
 
-  let preAxon = 0
-  let postAxon = 0
-  let preDendrite = 0
-  let postDendrite = 0
-  if (synapses) {
-    for (let i = 0; i < compartment.length; i++) {
-      const code = compartment[i]
-      if (code === CODE_AXON) {
-        preAxon += synapses.pre[i]!
-        postAxon += synapses.post[i]!
-      } else if (code === CODE_DENDRITE) {
-        preDendrite += synapses.pre[i]!
-        postDendrite += synapses.post[i]!
-      }
-    }
-  }
-
-  return {
+  const cable = {
     status,
     cableAxon: cableAxon / NM_PER_UM,
     cableDendrite: cableDendrite / NM_PER_UM,
     cableLinker: cableLinker / NM_PER_UM,
+  }
+  if (!synapses) {
+    return {
+      ...cable,
+      preAxon: null,
+      postAxon: null,
+      preDendrite: null,
+      postDendrite: null,
+      segregationIndex: null,
+    }
+  }
+  let preAxon = 0
+  let postAxon = 0
+  let preDendrite = 0
+  let postDendrite = 0
+  for (let i = 0; i < compartment.length; i++) {
+    const code = compartment[i]
+    if (code === CODE_AXON) {
+      preAxon += synapses.pre[i]!
+      postAxon += synapses.post[i]!
+    } else if (code === CODE_DENDRITE) {
+      preDendrite += synapses.pre[i]!
+      postDendrite += synapses.post[i]!
+    }
+  }
+
+  return {
+    ...cable,
     preAxon,
     postAxon,
     preDendrite,
@@ -856,7 +979,7 @@ export function splitColumnData(
    * group, applied one layer up.
    */
   const measured = (pick: (s: CompartmentStats) => number | null): ColumnData =>
-    stats.map((s) => (s.status === 'ok' ? pick(s) : null))
+    stats.map((s) => (hasSplit(s.status) ? pick(s) : null))
   return {
     splitStatus: stats.map((s) => s.status),
     cableAxon: measured((s) => s.cableAxon),
@@ -889,8 +1012,9 @@ export function flattenForSplit(
   presynapses: Uint32Array
   postsynapses: Uint32Array
   points: Float32Array
+  somas: Int32Array
 } {
-  const { parents, offsets, total } = packSkeletons(skeletons)
+  const { parents, offsets, somas, total } = packSkeletons(skeletons)
   const presynapses = new Uint32Array(total)
   const postsynapses = new Uint32Array(total)
   const points = withPoints ? packPositions(skeletons, offsets) : new Float32Array(0)
@@ -902,5 +1026,5 @@ export function flattenForSplit(
     postsynapses.set(assignment.post, offsets[i]!)
   }
 
-  return { parents, offsets, presynapses, postsynapses, points }
+  return { parents, offsets, presynapses, postsynapses, points, somas }
 }

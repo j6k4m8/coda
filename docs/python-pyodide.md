@@ -155,6 +155,16 @@ Four conventions carry it, each established against the runtime rather than assu
   `PyArg` and the call fails to compile with a message about `undefined`. Not obvious from the
   error; worth knowing before writing the second wrapper.
 
+**Each module runs in a namespace of its own**, a fresh `dict` handed to `runPython` as
+`globals`, and the entry function is read from there. Until 2026-10-10 every module ran into the
+one `py.globals`, so a private helper defined in two files was whichever loaded last:
+`meshes.py` and `skeletons.py` both define `_clean_one`, and Clean Meshes followed by Clean
+Skeletons raised `TypeError: _clean_one() takes 3 positional arguments but 6 were given` —
+reproduced in Pyodide, along with the fix. The price is that a helper two modules need is written
+in each (`_reroot_at`); no module reads another's globals, which was checked over every `.py`
+before the change. The `scripts/probe-*.mjs` probes still run one module into `py.globals`, which
+is the same thing when only one is loaded.
+
 `toJs` **copies** out of the wasm heap, checked rather than assumed — so a result outlives the
 proxy it came from, while every proxy taken is still destroyed where it was taken.
 
@@ -587,6 +597,14 @@ Resample and downsample are **one enum**, not two switches. That is a structural
 "mutually exclusive" — there is no state in which both ran, because there is one field holding
 one of three values.
 
+Downsample has since **moved to Simplify Skeletons** (below). The option stays on Clean
+Skeletons for a card that already holds it — declared `EnumOption.retired`, so the picker offers
+it only while it is the stored value and the assistant's catalogue never lists it, it runs exactly
+as before, and `validate` says where it went — because dropping it would turn an old workflow
+into a silent pass-through. `retired` replaced an `options` function testing the stored value,
+which cost the param its plan validation and catalogue listing: nothing can check a
+function-valued enum statically.
+
 Three things about them are worth knowing before changing either:
 
 - **The item count never changes**, and both `skeletonsFromResult` and `meshesFromResult` refuse
@@ -621,6 +639,54 @@ which nothing checks because there is nothing cheap to check it against: an inwa
 comes back empty and an inconsistently wound one quietly loses healthy membrane. Coda's meshes
 arrive outward-wound from every source and `mirrorGeometry` reverses each triple straight back,
 so the node states the requirement rather than testing for it.
+
+### Simplify Skeletons: a subset comes back, not geometry
+
+`neuron.simplifySkeletons` prunes twigs (`navis.prune_twigs`) and then thins, with one of three
+methods: every Nth node (`downsample_skeleton`), Ramer–Douglas–Peucker (`simplify_rdp`) or
+Visvalingam–Whyatt (`simplify_vw`). It is a node of its own rather than more steps on Clean
+Skeletons because **none of its operations moves a node or makes one**. That changes what
+crosses the bridge and what survives the trip:
+
+- **The result is `keep` and `parents`, not points.** `coda_simplify_skeletons` returns which
+  neuron-local rows survived, in their original order, and their parents as rows of the
+  survivors. `simplifyOps.skeletonsFromKeep` gathers positions, radii, `compartments`, a computed
+  `split` and `nodeValues` through that one list. Clean Skeletons has to drop the last two because
+  a resample mints new nodes; here each survivor *is* the node the label was computed for, in the
+  same place. Tags on survivors stay put, and a tag on a removed node is snapped to the nearest
+  survivor (the `snappedTags` rule).
+- **Prune before thinning.** A twig is measured along the cable as traced, and thinning first
+  cuts its corners and makes it shorter than it is.
+- **Twig length is cable length**, passed to `prune_twigs` as `weights`. Without weights fastcore
+  counts each edge as 1, and the threshold becomes a number of nodes.
+
+Two things about `prune_twigs` were found by running it, and the docstring states neither:
+
+- **`mask` is per node, and `True` means *may be pruned*.** The docstring reads as the opposite
+  ("mask nodes that should not be pruned"). The walk starts at the twig's tip, works back towards
+  the branch point, and stops at the first node that may not go. Measured on the docstring's own
+  seven-node example: a mask that is `True` only at the tip removes the tip alone. So the soma is
+  protected by setting it `False`. When the soma is a twig's tip, which is where it sits if it is
+  not the root, that twig is kept whole; when it sits part way along a twig, the twig is cut back
+  to it.
+- **An unbranched fragment is all twig.** fastcore never treats a root as a tip, but a cable with
+  no branch point is removed whole once it is shorter than the threshold. A neuron that arrived
+  unbranched would come back empty, and protecting the root alone would shrink it to one node. So
+  every component with no branch point is masked `False` (`_unbranched`, from fastcore's
+  `connected_components`). This is recomputed on every pass, because pruning a tree's last short
+  side branch leaves it unbranched.
+
+`Repeat` is navis' `recursive=True`: the loop runs until a pass removes nothing. The soma goes to
+all three thinning calls as `preserve`; roots, branch points and leaves survive those calls by
+fastcore's own rule. The VW threshold is an area, so the card's µm² becomes nm² by multiplying by
+10⁶, not 10³. The emitted notebook says so.
+
+**The notebook is the same computation, checked rather than argued.** `coda_prune_twigs` in the
+Python helpers repeats both protections, and every array stays in row numbers, so the thinning
+calls take the pruned rows as ids. The three Simplify cells from `everything.ipynb`, run under
+navis 2.0 with the pinned wheel, kept exactly the rows `coda_simplify_skeletons` keeps on the same
+neuron, under all three methods. The R side is a TODO pointing at the notebook, as for both
+cleaning nodes: R has no RDP or VW thinning for skeletons.
 
 ### NBLAST Matches: the bridge between the two shapes
 

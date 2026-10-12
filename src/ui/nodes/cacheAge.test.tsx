@@ -25,6 +25,7 @@ import '../../nodes'
 import { useGraphStore } from '../../store/graphStore'
 import { clearStorage } from '../../test/jsdomStubs'
 import { CacheAge } from './CacheAge'
+import { CacheLifetimeMenu } from './CacheLifetimeMenu'
 
 const DAY = 86_400_000
 
@@ -131,5 +132,98 @@ describe('the report reaching the card', () => {
 
     await waitFor(() => expect(runs).toBe(2))
     expect(Date.now() - useGraphStore.getState().nodeFetchedAt(id)!).toBeLessThan(DAY)
+  })
+})
+
+/*
+ * The node's cache lifetime, chosen on this label. The scheduler's half — what a lapse does to the
+ * badge, the key and the next run — is `scheduler.test.ts`'; this is the label's words and the
+ * gesture that reaches the setting.
+ */
+describe('the cache lifetime', () => {
+  it('says fetched rather than cached when nothing is kept', () => {
+    render(
+      <CacheAge fetchedAt={Date.now()} onRefresh={() => undefined} policy={{ maxAgeMs: 0 }} />,
+    )
+    expect(screen.getByRole('button').textContent).toContain('fetched 0s ago')
+  })
+
+  it('says expired once the data is older than the lifetime, and not before', () => {
+    const { rerender } = render(
+      <CacheAge
+        fetchedAt={Date.now() - 3 * DAY}
+        onRefresh={() => undefined}
+        policy={{ maxAgeMs: 7 * DAY }}
+      />,
+    )
+    expect(screen.getByRole('button').textContent).not.toContain('expired')
+    rerender(
+      <CacheAge
+        fetchedAt={Date.now() - 3 * DAY}
+        onRefresh={() => undefined}
+        policy={{ maxAgeMs: DAY }}
+      />,
+    )
+    const button = screen.getByRole('button')
+    expect(button.textContent).toContain('cached 3d ago · expired')
+    expect(button.className).toContain('coda-node__cache--expired')
+  })
+
+  it('opens its own menu on a right-click, and not the card’s', () => {
+    // React Flow's node menu is an `onContextMenu` on the wrapper this label sits inside.
+    const onMenu = vi.fn()
+    const onCard = vi.fn()
+    render(
+      <div onContextMenu={onCard}>
+        <CacheAge fetchedAt={Date.now()} onRefresh={() => undefined} onMenu={onMenu} />
+      </div>,
+    )
+    fireEvent.contextMenu(screen.getByRole('button'), { clientX: 40, clientY: 60 })
+    expect(onMenu).toHaveBeenCalledWith({ x: 40, y: 60 })
+    expect(onCard).not.toHaveBeenCalled()
+  })
+
+  it('leaves the browser’s menu alone where there is nothing to choose', () => {
+    const onCard = vi.fn()
+    render(
+      <div onContextMenu={onCard}>
+        <CacheAge fetchedAt={Date.now()} onRefresh={() => undefined} />
+      </div>,
+    )
+    fireEvent.contextMenu(screen.getByRole('button'))
+    expect(onCard).toHaveBeenCalledOnce()
+  })
+
+  it('is chosen from the menu as one undoable edit, ticked where it stands', () => {
+    const store = useGraphStore.getState()
+    const id = store.addNode('test.cacheAge', { x: 0, y: 0 })
+    const onClose = vi.fn()
+    const menu = () => (
+      <CacheLifetimeMenu
+        at={{ x: 0, y: 0 }}
+        nodeId={id}
+        policy={useGraphStore.getState().graph.nodes.find((n) => n.id === id)?.cache}
+        onRefresh={() => undefined}
+        onClose={onClose}
+      />
+    )
+    const { rerender } = render(menu())
+    expect(
+      screen.getByRole('menuitemradio', { name: /Default/ }).getAttribute('aria-checked'),
+    ).toBe('true')
+
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /1 day/ }))
+    const cacheOf = () => useGraphStore.getState().graph.nodes.find((n) => n.id === id)?.cache
+    expect(cacheOf()).toEqual({ maxAgeMs: DAY })
+    expect(onClose).toHaveBeenCalled()
+    rerender(menu())
+    expect(
+      screen.getByRole('menuitemradio', { name: /1 day/ }).getAttribute('aria-checked'),
+    ).toBe('true')
+
+    // No run: the lifetime is not in the provenance key, so nothing about the result moved.
+    expect(runs).toBe(0)
+    useGraphStore.getState().undo()
+    expect(cacheOf()).toBeUndefined()
   })
 })

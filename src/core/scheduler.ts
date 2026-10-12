@@ -26,6 +26,8 @@ import {
   referenceEdgeIds,
   topoSort,
 } from './graph'
+import { cacheExpired, lapsesAt } from './cachePolicy'
+import type { CachePolicy } from './cachePolicy'
 import { hashValue } from './hash'
 import type { InferenceResult } from './inference'
 import { hasErrors, inferGraph } from './inference'
@@ -339,7 +341,22 @@ export interface SchedulerHost {
    * one unwritable file is not a reason to abandon the other three hundred and ninety-nine.
    */
   onIteration?(info: IterationInfo): Promise<void> | void
+  /**
+   * A held result has reached the end of its node's cache lifetime (`GraphNode.cache`).
+   *
+   * The host answers with `refreshStates`, which is where the lapse is taken — this only says
+   * *when*. Nothing else: a lapse turns a badge stale and fetches nothing, so a host that ignores
+   * this (a document in the background) loses only a badge, and derives it on the way back in.
+   */
+  onLapseDue?(): void
 }
+
+/**
+ * The longest a lapse timer is set for. `setTimeout` takes a signed 32-bit delay, and anything
+ * past it — the thirty-day lifetime is — fires *at once*. Firing early instead is harmless: the
+ * host re-derives, nothing has lapsed, and the timer is set again.
+ */
+const MAX_TIMER_MS = 2 ** 31 - 1
 
 /**
  * How many times any Scheduler's held results have changed — for the memory readout, which walks
@@ -381,6 +398,26 @@ export class Scheduler {
    * the run, so a request made against an expensive node survives every cheap pass in between.
    */
   private forceRefresh = new Set<string>()
+  /**
+   * How many times each node's result has lapsed — folded into its provenance key, like
+   * `loopIndex`.
+   *
+   * **The key has to move, and nothing in the document moved it.** A lapsed node re-fetches under
+   * the same params and the same upstream, so its key would be unchanged — and every node
+   * downstream would go on answering, fresh by key, from data the lapse exists to replace. Bumping
+   * this re-keys the node and its descendants at once, which turns them all stale while their old
+   * outputs stay on screen: what an edit does, without anybody making one. Session state, for
+   * `loopIndex`'s reasons.
+   */
+  private lapses = new Map<string, number>()
+  /**
+   * Entries that have already lapsed once, so a stale entry left in place does not lapse again on
+   * every `refreshStates` — which would move the key each time and retire a run of the very node
+   * it asked for. Weak, because an entry replaced in the cache must not be kept alive by this.
+   */
+  private lapsed = new WeakSet<CacheEntry>()
+  /** The timer for the soonest result due to lapse, and when it fires. See `setLapseAlarm`. */
+  private lapseAlarm: { due: number; timer: ReturnType<typeof setTimeout> } | undefined
   /**
    * Partial outputs a still-running node has published through `ctx.publish`.
    *
@@ -641,6 +678,8 @@ export class Scheduler {
     const { order, cyclic } = topoSort(graph)
     const nodes = nodesById(graph)
     const inbound = inboundIndex(graph)
+    // Before the keys, which a lapse moves.
+    this.lapse(nodes)
     /*
      * Skipped outright on an empty cache, which is every boot and every refresh after
      * `invalidateAll`. The keys have exactly one reader — the freshness test below, against a
@@ -722,6 +761,51 @@ export class Scheduler {
     this.host.onStateChange?.()
   }
 
+  /**
+   * Take every result whose data has outlived its node's cache lifetime: re-key the node (see
+   * `lapses`) and ask its next execution to read the server rather than the store. Then set the
+   * alarm for the soonest result still to lapse — one walk for both.
+   *
+   * Never a node still computing — moving its key would retire the run that is about to replace
+   * the lapsed data, whose own entry arms the alarm when it lands — and never twice for one entry.
+   * The policy is read first, so on a graph that set none this is a map lookup per held result.
+   */
+  private lapse(nodes: Map<string, GraphNode>): void {
+    const now = Date.now()
+    let soonest = Infinity
+    for (const [nodeId, entry] of this.cache) {
+      const due = lapsesAt(entry.fetchedAt, nodes.get(nodeId)?.cache)
+      if (due === undefined || this.lapsed.has(entry)) continue
+      if (now <= due) {
+        soonest = Math.min(soonest, due)
+        continue
+      }
+      if (this.live(nodeId)) continue
+      this.lapsed.add(entry)
+      this.lapses.set(nodeId, (this.lapses.get(nodeId) ?? 0) + 1)
+      this.forceRefresh.add(nodeId)
+    }
+    this.setLapseAlarm(soonest)
+  }
+
+  /**
+   * Point the lapse timer at `due` — `Infinity` for none. Left alone when it already is, so an
+   * ordinary edit does not tear a timer down and build the same one again.
+   */
+  private setLapseAlarm(due: number): void {
+    if (due === (this.lapseAlarm?.due ?? Infinity)) return
+    clearTimeout(this.lapseAlarm?.timer)
+    this.lapseAlarm = undefined
+    if (due === Infinity) return
+    // A beat past `due`, so the host's re-derive finds the entry strictly older than its lifetime.
+    const delay = Math.min(MAX_TIMER_MS, Math.max(0, due - Date.now() + 50))
+    const timer = setTimeout(() => {
+      this.lapseAlarm = undefined
+      this.host.onLapseDue?.()
+    }, delay)
+    this.lapseAlarm = { due, timer }
+  }
+
   /** Drop cached results, e.g. after switching datasets or on user request. */
   invalidateAll(): void {
     // An evaluation still in flight would put its result straight back under a key that, after a
@@ -730,6 +814,8 @@ export class Scheduler {
     this.cache.clear()
     this.states.clear()
     this.forceRefresh.clear()
+    this.lapses.clear()
+    this.setLapseAlarm(Infinity)
     this.loopIndex.clear()
     this.loopDone.clear()
     this.host.onStateChange?.()
@@ -753,6 +839,8 @@ export class Scheduler {
     this.states = new Map(from.states)
     this.loopIndex = new Map(from.loopIndex)
     this.loopDone = new Set(from.loopDone)
+    // It takes part in the key, so it rides along for `loopIndex`'s reason.
+    this.lapses = new Map(from.lapses)
   }
 
   invalidateNode(graph: CodaGraph, nodeId: string): void {
@@ -936,6 +1024,9 @@ export class Scheduler {
 
     const loops = loopsIn(graph).filter((l) => scope.has(l.beginId))
 
+    // A lapse moves keys, so it is taken before they are computed — a Run is when somebody asks
+    // for fresh data.
+    this.lapse(nodes)
     const pass: RunPass = {
       graph,
       inference,
@@ -1668,7 +1759,10 @@ export class Scheduler {
     // Spent here rather than at the top of the run: a node that was deferred by the cheap
     // pass has not had its chance to honour the request yet. Inside a loop that means the
     // first pass, which is the one that would reach the network anyway.
-    const refresh = this.forceRefresh.delete(nodeId)
+    //
+    // **Don't cache** is a refresh on every execution, so it needs no flag of its own.
+    const policy = this.nodeOf(pass, nodeId).cache
+    const refresh = this.forceRefresh.delete(nodeId) || policy?.maxAgeMs === 0
     // Collected per execution rather than on the context object, so a node cannot read back
     // what it reported and nothing survives into the next run.
     const fetched: { at?: number } = {}
@@ -1703,6 +1797,7 @@ export class Scheduler {
       // A loop exit folds into what its last pass returned — see `RunPass.accumulations`.
       accumulations: def.loop === 'end' && iteration ? pass.accumulations : undefined,
       fetched,
+      policy,
     })
   }
 
@@ -1715,14 +1810,29 @@ export class Scheduler {
       key: string
       accumulations: Map<string, Readonly<Record<string, Value>>> | undefined
       fetched: { at?: number }
+      policy: CachePolicy | undefined
     },
   ): Promise<Outcome> {
-    const { key, fetched } = run
+    const { key, fetched, policy } = run
     const signal = ctx.signal
     const nodeStarted = performance.now()
     try {
-      const outputs = await def.evaluate(ctx)
+      let outputs = await def.evaluate(ctx)
       signal.throwIfAborted()
+      /*
+       * The lifetime's backstop. A lapse is taken against a *held* result, so it cannot see the
+       * case where an edit re-ran the node and the store answered with a copy older than the
+       * node's lifetime — the store keeps a table a month whatever this node asked. The node said
+       * how old its data is, so ask again, reading the server this time. Once: a node whose
+       * refresh still reports the old age has no fresher copy to give.
+       */
+      if (!ctx.refresh && cacheExpired(fetched.at, policy)) {
+        delete fetched.at
+        // Released first, so a large stale result is not held beside the one replacing it.
+        outputs = {}
+        outputs = await def.evaluate({ ...ctx, refresh: true })
+        signal.throwIfAborted()
+      }
 
       const warnings = this.liveWarnings.get(nodeId)
       this.cache.set(nodeId, {
@@ -1731,6 +1841,9 @@ export class Scheduler {
         ...(fetched.at === undefined ? {} : { fetchedAt: fetched.at }),
         ...(warnings && warnings.length > 0 ? { warnings } : {}),
       })
+      // Brought forward only: the alarm is for the soonest result, and this may not be it.
+      const due = lapsesAt(fetched.at, policy) ?? Infinity
+      if (due < (this.lapseAlarm?.due ?? Infinity)) this.setLapseAlarm(due)
       /*
        * A loop exit is a fold, so what it just returned is the accumulator the next pass folds
        * into. Held here rather than in the cache because it is not an answer to a key — it is
@@ -1845,6 +1958,8 @@ export class Scheduler {
            * other node, so no graph without a loop hashes anything extra.
            */
           ...(this.loopIndex.has(nodeId) ? { iteration: this.loopIndex.get(nodeId) } : {}),
+          // How often its data has lapsed (`lapses`). Absent until the first lapse, likewise.
+          ...(this.lapses.has(nodeId) ? { lapse: this.lapses.get(nodeId) } : {}),
         }),
       )
     }
@@ -1991,6 +2106,7 @@ export class Scheduler {
     // node took the id, keying it off a loop that no longer exists.
     for (const id of [...this.loopIndex.keys()]) if (!alive.has(id)) this.loopIndex.delete(id)
     for (const id of [...this.loopDone]) if (!alive.has(id)) this.loopDone.delete(id)
+    for (const id of [...this.lapses.keys()]) if (!alive.has(id)) this.lapses.delete(id)
   }
 }
 

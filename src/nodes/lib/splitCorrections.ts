@@ -30,6 +30,7 @@ import { CODE_AXON, CODE_DENDRITE, CODE_LINKER, perGeometry } from '../../core/v
 import type { SkeletonGeometry } from '../../core/values'
 import type { Arbor } from './arborOps'
 import { buildArbor, resolveRoot } from './arborOps'
+import { nearestNode } from '../../data/soma'
 
 /** The param the node stores them in, spelled once for the node and the editor. */
 export const CORRECTIONS_PARAM = 'corrections'
@@ -125,8 +126,8 @@ const arbors = perGeometry(() => new Map<number, Arbor>())
  * afresh each time (one pass, cheap beside a build), so a relabelled soma over the same arrays is a
  * different key rather than a tree rooted on the old one.
  *
- * One known limit: built without heal bridges, so with `Heal fragmented skeletons` on, a correction
- * reaches only the fragment holding its own root; one anchored on another fragment is stale.
+ * It walks the parents it is handed, so a forest reaches only the fragment holding the root: a
+ * neuron healed to be split is handed over healed (`arborHeal.ts`) by both callers.
  */
 export function splitArbor(skeleton: SkeletonGeometry, root?: number): Arbor {
   const at = root ?? resolveRoot(skeleton, 'soma').node
@@ -136,22 +137,23 @@ export function splitArbor(skeleton: SkeletonGeometry, root?: number): Arbor {
   return arbor
 }
 
+/**
+ * `node` and everything distal of it labelled `code` — what "distal" means for a correction and for
+ * a split by tag alike. A subtree is one contiguous run of the pre-order, `tin`/`tout`'s whole
+ * purpose. A node the walk never reached is left alone.
+ */
+export function fillDistal(arbor: Arbor, node: number, code: number, out: Uint8Array): void {
+  const from = arbor.tin[node]!
+  if (from >= 0) fillRun(arbor, from, arbor.tout[node]!, code, out)
+}
+
+function fillRun(arbor: Arbor, from: number, to: number, code: number, out: Uint8Array): void {
+  for (let k = from; k < to; k++) out[arbor.order[k]!] = code
+}
+
 /** The nearest node to a point within `SNAP_NM`, or -1. */
 export function snapToNode(skeleton: SkeletonGeometry, at: readonly number[]): number {
-  const p = skeleton.positions
-  let best = -1
-  let bestD = SNAP_NM * SNAP_NM
-  for (let i = 0; i < skeleton.parents.length; i++) {
-    const dx = p[i * 3]! - at[0]!
-    const dy = p[i * 3 + 1]! - at[1]!
-    const dz = p[i * 3 + 2]! - at[2]!
-    const d = dx * dx + dy * dy + dz * dz
-    if (d <= bestD) {
-      bestD = d
-      best = i
-    }
-  }
-  return best
+  return nearestNode(skeleton.positions, at, SNAP_NM)
 }
 
 /**
@@ -159,8 +161,8 @@ export function snapToNode(skeleton: SkeletonGeometry, at: readonly number[]): n
  *
  * Returns the labels it was given, untouched, when there is nothing to apply. A correction that
  * cannot be placed — no node within `SNAP_NM`, or a node the walk from the root never reaches
- * (another fragment of an unhealed forest), where "distal" has no meaning — is skipped and not
- * counted in `applied`, which is what the caller's stale count is the rest of.
+ * (another fragment of a forest the caller did not heal), where "distal" has no meaning — is
+ * skipped and not counted in `applied`, which is what the caller's stale count is the rest of.
  */
 export function applyCorrections(
   skeleton: SkeletonGeometry,
@@ -180,15 +182,11 @@ export function applyCorrections(
     if (from < 0) continue
     const to = arbor.tout[node]!
     const code = CODE[correction.to]
-    // The subtree is one contiguous run of the pre-order — `tin`/`tout`'s whole purpose — so
-    // "everything else" is the two runs either side of it.
-    const set = (a: number, b: number) => {
-      for (let k = a; k < b; k++) out[arbor.order[k]!] = code
-    }
-    if (correction.scope === 'distal') set(from, to)
+    if (correction.scope === 'distal') fillDistal(arbor, node, code, out)
     else {
-      set(0, from)
-      set(to, arbor.order.length)
+      // "Everything else" is the two runs of the pre-order either side of the subtree.
+      fillRun(arbor, 0, from, code, out)
+      fillRun(arbor, to, arbor.order.length, code, out)
     }
     applied++
   }

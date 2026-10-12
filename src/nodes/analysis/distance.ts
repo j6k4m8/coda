@@ -32,9 +32,9 @@
  */
 
 import { registerNode } from '../../core/registry'
-import { T } from '../../core/types'
-import { makeMatrix } from '../../core/values'
-import { matrixAxisLabels } from '../lib/geometryLabels'
+import { NEURONS_BOTH_AXES, T } from '../../core/types'
+import { makeMatrix, withLines } from '../../core/values'
+import { matrixAxisLabels, matrixAxisLines } from '../lib/geometryLabels'
 import type { ResolvedShape } from '../lib/geometryDistance'
 import {
   DISTANCE_KINDS,
@@ -169,9 +169,9 @@ registerNode({
 
   /*
    * A matrix carries no schema — its labels are data, decided by the run — so there is nothing to
-   * infer beyond the kind. `neuron.nblast`'s answer, for its reason.
+   * infer beyond the kind and that both axes are neurons. `neuron.nblast`'s answer.
    */
-  inferOutputs: () => ({ matrix: T.matrix() }),
+  inferOutputs: () => ({ matrix: T.matrix(NEURONS_BOTH_AXES) }),
 
   /*
    * Two things a type can see. The kind check is what the `any` ports cannot do on their own:
@@ -288,13 +288,17 @@ registerNode({
     )
 
     const [rowLabels, colLabels] = matrixAxisLabels(query, target, ctx.column('labelColumn'))
+    const lines = matrixAxisLines(query, target)
     return {
-      matrix: makeMatrix(
-        rowLabels,
-        colLabels,
-        values,
-        distanceValueLabel(params, query.kind),
-        distanceMeasure(params),
+      matrix: withLines(
+        makeMatrix(
+          rowLabels,
+          colLabels,
+          values,
+          distanceValueLabel(params, query.kind),
+          distanceMeasure(params),
+        ),
+        lines,
       ),
     }
   },

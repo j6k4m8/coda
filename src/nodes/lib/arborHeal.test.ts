@@ -10,8 +10,10 @@ describe('healSkeleton', () => {
     expect(healed.skeleton).toBe(skeleton)
     expect(healed.pieces).toBe(1)
     expect(healed.bridges).toBeUndefined()
-    // The same answer, by identity, for the card asking during render.
-    expect(healedNow(skeleton)).toBe(healed)
+    // The same answer for the card asking during render — the skeleton itself, by identity.
+    const now = healedNow(skeleton)
+    expect(now).toEqual(healed)
+    expect('skeleton' in now && now.skeleton).toBe(skeleton)
   })
 
   it('says how many pieces a forest is in, without healing it', () => {

@@ -58,8 +58,9 @@
 
 import { refuseIfOverCrashFloor } from '../../core/limits'
 import { packNode } from '../../core/registry'
-import { T } from '../../core/types'
-import { getColumn, isTableValue, makeMatrix } from '../../core/values'
+import { T, findColumn } from '../../core/types'
+import { getColumn, isTableValue, makeMatrix, neuronLines, withLines } from '../../core/values'
+import { ID_COLUMN_NAME, idText } from '../../core/ids'
 import type { CellValue } from '../../core/values'
 import type { TraceCost } from '../../data/zapbench/traces'
 import {
@@ -269,6 +270,10 @@ export const neuronTracesNode = packNode({
     const ids = getColumn(input, idColumnName)
     const labelColumnName = ctx.column('labelColumn')
     const labels = labelColumnName ? getColumn(input, labelColumnName) : undefined
+    // Each row's neuron, recorded beside its label: the ZapBench id is another numbering.
+    const neurons = findColumn(input.schema, ID_COLUMN_NAME)
+      ? getColumn(input, ID_COLUMN_NAME)
+      : undefined
 
     /*
      * One pass, one array. A row without an id is a neuron nobody matched to the functional
@@ -290,7 +295,13 @@ export const neuronTracesNode = packNode({
      * a `Map` keyed by a dense array index and a `matched` counter that nothing tied to
      * `columns.length`.
      */
-    const selected: Array<{ id: number | null; label: string; at?: number }> = []
+    const neuronAt = (row: number) => idText(neurons?.[row] ?? null)
+    const selected: Array<{
+      id: number | null
+      label: string
+      neuron: string | null
+      at?: number
+    }> = []
     const columns: number[] = []
     let unparsed = 0
     for (let row = 0; row < ids.length; row++) {
@@ -307,7 +318,7 @@ export const neuronTracesNode = packNode({
          * branch below falls back at all. One-based, because it names a row of the input table
          * as a reader would count it.
          */
-        selected.push({ id: null, label: label || `row ${row + 1}` })
+        selected.push({ id: null, label: label || `row ${row + 1}`, neuron: neuronAt(row) })
         continue
       }
       const column = traceColumnOf(id)
@@ -342,7 +353,12 @@ export const neuronTracesNode = packNode({
       }
       // A blank label would collide with every other blank on an axis the Heatmap filters, so
       // the id is the fallback rather than an empty string.
-      selected.push({ id, label: label || String(id), at: columns.length })
+      selected.push({
+        id,
+        label: label || String(id),
+        neuron: neuronAt(row),
+        at: columns.length,
+      })
       columns.push(column)
     }
 
@@ -429,13 +445,18 @@ export const neuronTracesNode = packNode({
       values.set(result.values.subarray(at * steps, (at + 1) * steps), row * steps)
     }
 
+    const stepNames = stepLabels(window)
+    const matrix = makeMatrix(
+      selected.map((entry) => entry.label),
+      stepNames,
+      values,
+      traceValueLabel(product, conditionName),
+    )
+    if (!neurons) return { traces: matrix }
+    // Timesteps name no neuron, though `0`, `1`, `2` would read as ids: their lines are null.
+    const rows = neuronLines(selected.map((entry) => entry.neuron))
     return {
-      traces: makeMatrix(
-        selected.map((entry) => entry.label),
-        stepLabels(window),
-        values,
-        traceValueLabel(product, conditionName),
-      ),
+      traces: withLines(matrix, { rows, cols: neuronLines(stepNames.map(() => null)) }),
     }
   },
 })

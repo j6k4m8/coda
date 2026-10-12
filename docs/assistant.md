@@ -286,11 +286,22 @@ Rendered at `lean` as well as `full`, per that level's rule: a fact a plan can b
 what a setting means. Both halves are checked against the registry by a test rather than by
 `registerNode`, since a producer may register after its consumer.
 
+**A second member, measured the same way.** Connection Compartments' `Skeletons` port reads a split
+that only Split Axon/Dendrite writes, and `T.skeletons()` accepts any skeletons, so a bare Skeletons
+node wired straight in applies cleanly and counts every synapse as unsplit. Asked to *count each
+connection's synapses by the compartment at either end*, `gemma4:31b-cloud` at `lean` added the
+node every time and split first **0/5** without the line, **8/10** with
+`producedBy: { type: 'neuron.splitCompartments', port: 'out' }` (`live.test.ts`, *splits the skeletons
+before counting connections by compartment*). The second half came free: in all eight, the split's
+skeletons were fetched for Connectivity's `Neuron Set`, so both ends of every edge were covered —
+nothing in the prompt says so.
+
 It is a `{ type, port? }` pair rather than a bare type, and `port` defaults to this port's own id.
-The bare form looked sufficient on the only member that exists — and cannot express the obvious
-second one: `neuron.partnerVectors` wants the same declaration on a port called `labels`, fed by
-`compare.matchTypes`' `labels1`. **That second member is deliberately not declared yet**, because
-every number on this page was measured and that one has not been.
+The bare form looked sufficient on the first member — and cannot express two others: Connection
+Compartments' port is fed by an output called `out`, and `neuron.partnerVectors` wants the same
+declaration on a port called `labels`, fed by `compare.matchTypes`' `labels1`. **That last one is
+deliberately not declared yet**, because every number on this page was measured and that one has
+not been.
 
 **A second line borrows that shape, and is deliberately labelled unmeasured.**
 `PortDef.exclusiveGroup` says that a node's optional inputs are *alternatives* rather than a set
@@ -329,6 +340,9 @@ all five count runs charted `weight` under a title saying "Counts". Declaring th
 same port is what fixed it, so a port with a `feeds` entry for one reading of a request wants one for
 the other reading too. The *"follow the request"* clause stayed on every line; it was never measured
 on its own, having shown nothing where it was tried.
+
+When a request and an option's label already use the same words, no note may be needed at all —
+measured for Split Axon/Dendrite's `Method` under *What is deliberately not built*.
 
 ### A plan that is legal and still wrong — the advisory round
 
@@ -544,6 +558,15 @@ app prompt since the split, both **unmeasured**: a corrected layout claim, and o
 node that was already appearing in every listing.
 
 ## What is deliberately not built
+
+**An enum's option labels were enough, and the planned note was not needed.** Split
+Axon/Dendrite's `Method` gained "by ROI" and "by tag", and the plan for them proposed a `feeds`-style
+note so a request phrased by region would reach the right option. Measured first, `gemma4:31b-cloud`
+at `lean` (`live.test.ts`, *splits by ROI when the request names…* and *splits by tag when…*):
+**10/10** chose "by ROI" for *their dendrites are the part inside LO(R)*, every time with `The ROIs
+hold` on "the dendrite" and ROI Meshes wired into `Volumes` and limited to LO(R); **5/5** chose "by
+tag" with the named tag in `Axon tags`. No note was added. The difference from `producedBy`'s case
+is that there the fact lived on another node; here the option and the request use the same words.
 
 **No tool loop.** It was the plan for the values half until the questions turned out to be
 aggregates. What is left for one is a single deep case — the full distinct list of a column the

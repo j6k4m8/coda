@@ -320,6 +320,46 @@ export interface EnumOption {
    * dropdown row and a tooltip show both, through `optionText`.
    */
   note?: string
+  /**
+   * Why this option is no longer offered — "moved to Simplify Skeletons". A retired option stays
+   * in the list so a card that already holds it loads, validates and runs exactly as before; it is
+   * offered only to that card (`offeredOptions`), never in the assistant's catalogue, and a plan
+   * naming it is refused. Static on purpose: a function-valued `options` that tested the stored
+   * value would hide the whole list from plan validation and the catalogue.
+   */
+  retired?: string
+}
+
+/**
+ * The options offered for a value chosen anew: every live one, and a retired one only to the card
+ * already holding it (`current`, one value or a `multiEnum`'s list) — with the reason as its
+ * note, so the card says where the option went. The one statement of `retired`'s rule; the
+ * catalogue and the error listings read it with no `current`.
+ */
+export function offeredOptions(
+  options: readonly EnumOption[],
+  current?: unknown,
+): EnumOption[] {
+  if (!options.some((option) => option.retired)) return options as EnumOption[]
+  return options
+    .filter((option) => !option.retired || holds(current, option.value))
+    .map((option) => (option.retired ? { ...option, note: option.retired } : option))
+}
+
+/**
+ * The retired option `value` names, if any — one value, or any of a `multiEnum`'s list. For a
+ * caller that must refuse a value chosen anew (a plan), where `offeredOptions` is the picker's half.
+ */
+export function retiredIn(
+  options: readonly EnumOption[],
+  value: unknown,
+): EnumOption | undefined {
+  return options.find((option) => option.retired && holds(value, option.value))
+}
+
+/** Whether a stored value — one string, or a `multiEnum`'s list — is or includes `option`. */
+function holds(value: unknown, option: string): boolean {
+  return Array.isArray(value) ? value.includes(option) : value === option
 }
 
 /** An option as one line of text — the label, then its note in brackets. */
@@ -1585,7 +1625,7 @@ export function validateParamValue(param: ParamDef, value: ParamValue): string |
        */
       if (typeof param.options === 'function') return undefined
       if (param.options.some((o) => o.value === value)) return undefined
-      return `"${param.id}" has no option "${value}". Options: ${param.options
+      return `"${param.id}" has no option "${value}". Options: ${offeredOptions(param.options)
         .map((o) => o.value)
         .join(', ')}.`
     }
@@ -1603,7 +1643,7 @@ export function validateParamValue(param: ParamDef, value: ParamValue): string |
       const stray = (value as string[]).find((v) => !allowed.has(v))
       return stray === undefined
         ? undefined
-        : `"${param.id}" has no option "${stray}". Options: ${param.options
+        : `"${param.id}" has no option "${stray}". Options: ${offeredOptions(param.options)
             .map((o) => o.value)
             .join(', ')}.`
     }

@@ -133,7 +133,7 @@ function endpointLines(
  * chained call: a constant indent is right in one of those places and wrong in the other, and
  * generated code that reads as carelessly formatted is generated code nobody trusts.
  */
-function renameLines(indent: string): string[] {
+export function renameLines(indent: string): string[] {
   return [
     `${indent}'bodyId_pre': 'preId',`,
     `${indent}'type_pre': 'preType',`,

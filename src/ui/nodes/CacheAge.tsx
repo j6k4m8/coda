@@ -21,6 +21,8 @@
 
 import { type ReactNode, useEffect, useState } from 'react'
 
+import type { CachePolicy } from '../../core/cachePolicy'
+import { cacheExpired, cacheLifetimeLabel } from '../../core/cachePolicy'
 import { formatAge } from '../../style/format'
 
 /** How often the label re-reads the clock. A minute, since the unit never changes faster. */
@@ -47,9 +49,27 @@ export interface CacheAgeProps {
   empty?: string
   /** Extra detail for the title, appended to what the age already says. */
   title?: string
+  /**
+   * The node's own cache lifetime (`GraphNode.cache`), which changes the words: `fetched` under
+   * **Don't cache**, since nothing was kept, and `expired` once the data is older than allowed.
+   *
+   * `expired` is worked out here from the minute tick rather than read from the run state, so it
+   * appears the minute the data lapses — the scheduler's own timer turns the badge stale, and
+   * the two agree without either waiting on the other.
+   */
+  policy?: CachePolicy
+  /** A right-click on the label — where the cache lifetime is chosen. Absent, the browser's. */
+  onMenu?: (at: { x: number; y: number }) => void
 }
 
-export function CacheAge({ fetchedAt, onRefresh, empty, title }: CacheAgeProps) {
+export function CacheAge({
+  fetchedAt,
+  onRefresh,
+  empty,
+  title,
+  policy,
+  onMenu,
+}: CacheAgeProps) {
   /*
    * A counter rather than a stored age: the value is derived at render from `Date.now()`, so a
    * card mounted at any point shows the right number without waiting for the first tick, and
@@ -70,13 +90,25 @@ export function CacheAge({ fetchedAt, onRefresh, empty, title }: CacheAgeProps) 
       </span>
     )
   }
-  const age = formatAge(Date.now() - fetchedAt)
+  const now = Date.now()
+  const age = formatAge(now - fetchedAt)
+  const uncached = policy?.maxAgeMs === 0
+  const expired = cacheExpired(fetchedAt, policy, now)
+  const sentences = [
+    `Data read ${age} ago${expired ? ', past this node’s cache lifetime' : ''}` +
+      ` — click to fetch it again` +
+      (onMenu ? ', right-click to choose how long it is kept.' : '.'),
+    policy && `Cache lifetime: ${cacheLifetimeLabel(policy)}.`,
+    title,
+  ]
   return (
     <RefreshButton
-      title={`Data read ${age} ago — click to fetch it again${title ? `. ${title}` : ''}`}
+      title={sentences.filter(Boolean).join(' ')}
       onRefresh={onRefresh}
+      onMenu={onMenu}
+      modifier={expired ? 'expired' : undefined}
     >
-      cached {age} ago
+      {uncached ? 'fetched' : 'cached'} {age} ago{expired ? ' · expired' : ''}
     </RefreshButton>
   )
 }
@@ -89,16 +121,22 @@ export function CacheAge({ fetchedAt, onRefresh, empty, title }: CacheAgeProps) 
 export function RefreshButton({
   title,
   onRefresh,
+  onMenu,
+  modifier,
   children,
 }: {
   title: string
   onRefresh: () => void
+  /** A right-click: opens this control's own menu rather than the card's. */
+  onMenu?: (at: { x: number; y: number }) => void
+  /** A `coda-node__cache--*` variant, e.g. `expired`. */
+  modifier?: string
   children: ReactNode
 }) {
   return (
     <button
       type="button"
-      className="coda-node__cache nodrag"
+      className={`coda-node__cache nodrag${modifier ? ` coda-node__cache--${modifier}` : ''}`}
       // `nodrag` because the foot sits on a draggable card, and a control that pans the canvas
       // when you press it is not a control.
       title={title}
@@ -106,6 +144,16 @@ export function RefreshButton({
         event.stopPropagation()
         onRefresh()
       }}
+      // Stopped, or the card's own menu opens over this one: React Flow's `onNodeContextMenu`
+      // listens on the node wrapper this button sits inside.
+      onContextMenu={
+        onMenu &&
+        ((event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onMenu({ x: event.clientX, y: event.clientY })
+        })
+      }
     >
       {children} <span aria-hidden="true">⟳</span>
     </button>

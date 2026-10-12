@@ -121,6 +121,15 @@ a `splitSummarySchema()` / `splitSummaryTable()` pair, with an agreement test.
 - **A synapse's `compartment` is the split's, and the column says it.** It is named `compartment`,
   but the help and the schema description say "computed". The source's SWC label is
   `Skeleton to Points`' column, which is a different thing.
+- **The tree is rerooted at the soma before flow is computed** (after any heal), as navis's
+  `reroot_soma=True` does by default. *Built, 2026-10-10:* flow's branch-point correction reads
+  which way the tree points, so male-CNS 48122 rooted in its arbour split differently from the same
+  skeleton rooted at its cell body. The request carries `somas` from `packSkeletons`
+  (`widestSomaNode`, or `-1` where none is labelled), so the heal and the split reroot at one node.
+  `probe:split` hands navis's neurons over *un*rerooted, so the reroot it checks is Coda's (three of
+  its five are not rooted at the soma). Healing roots at the soma too (`skeletons.py`, after
+  `heal_skeleton`, which keeps the *largest* fragment's root), so the editor's dendrogram, drawn
+  from a heal, starts at the cell body.
 
 ## Node 2: connection types
 
@@ -130,7 +139,7 @@ Working name **Connection Compartments**, `connectome:connectionCompartments`.
 | --- | --- |
 | Inputs | `dataset` (Dataset), `edges` (Table), `skeletons` (Skeletons with `split`, from node 1) |
 | Outputs | `edges`: typed edge list, wide or long. `synapses`: the per-synapse cloud with `preCompartment` and `postCompartment`, which a 3D View can colour by the class. |
-| Params | `Presynaptic` (column, default `preId`), `Postsynaptic` (default `postId`), `Layout` (wide / long), `Max snap distance (µm)` (10), `Min confidence`, and the synapse `Rows` unit (`synapseUnitParam`, as Synapses Between) |
+| Params | `Presynaptic` (column, default `preId`), `Postsynaptic` (default `postId`), `Layout` (wide / long), `Max snap distance (µm)` (10), `Min confidence`. *Built without* a synapse `Rows` unit: a synapses-between request takes none, only the plain Synapses node does. |
 | Cost | **`expensive`**: it fetches. |
 
 ### The steps
@@ -146,6 +155,48 @@ Working name **Connection Compartments**, `connectome:connectionCompartments`.
 4. Tally per pair into six counts: the four classes, `linker` (either end on linker), and
    `unsplit` (either end's neuron has no split, is missing from `skeletons`, or snapped beyond the
    distance cap).
+
+*Built (phase 4)*, as `nodes/lib/connectionCompartments.ts` (the counting and both layouts, each
+schema beside its table) and `packs/connectome/connectionCompartments.ts` (the fetch and the
+warnings). Departures from the table above:
+
+- **No `Rows` param.** Synapses Between has none either: a synapses-between row is one connection
+  by construction, so there is no unit to choose.
+- **Snapping reuses Topology's grid.** `nodeLocator` was factored out of `assignSynapses` so one
+  grid per skeleton touched answers both ends of every synapse. It is built per call: held across
+  runs, a grid was several times the skeleton's own size, to save about a millisecond.
+- **The synapses output always has the both-ends schema**, with `partnerX/Y/Z` null on a row from a
+  one-coordinate source, so its type is known before a Run whichever source answers. It carries
+  `preCompartment`, `postCompartment` and `connection`.
+- **Long emits all six classes for every edge, zeros included.** Then a pivot back to wide is
+  exact, and an edge never vanishes from the table for having no synapses.
+- **A repeated pair carries the pair's whole counts on every row**, with a warning that summing
+  the table counts them again. Splitting a pair's synapses across its rows (by region, say) is a
+  different node's question.
+- **Unsplit reasons are counted** (no skeleton, no split, beyond the snap distance) and said in
+  one warning.
+- **The cross-product cost is reported after the fact.** It is reported when 10,000 or more
+  fetched synapses were not on a listed edge and they outnumber the kept ones. Before the fetch
+  only the neuron counts per side are known, and those warn through `Warn above`, as Synapses
+  Between does.
+- **The last fetch is held per edge-list value, its rows on listed pairs only** (a `WeakMap`,
+  checked against the dataset value, `Min confidence` and the pairs). `Layout` and `Max snap
+  distance` shape the answer and not the question, so moving them does not re-fetch a cross
+  product, and the classification is kept beside the fetch, so only `Max snap distance`
+  re-classifies; editing the edge list re-fetches. The raw cross product is not
+  kept, being mostly rows no edge lists. A hit replays the source's own warnings and reports its
+  age (`reportFetched`), as every `dataCache` node does. Clear Cache drops it and fetches again.
+- **Each edge row is read once** (`readEdgePairs`), and each row's counts once per run
+  (`rowTallies`). The classifier looks pairs up in nested maps rather than building a key per
+  synapse. The snap distance bounds the search (`nodeLocator`'s radius): a point further than it
+  from the skeleton's box is rejected outright, and a radius whose rings would outnumber the nodes
+  scans the nodes instead. A far site had searched 64 rings out before giving up.
+
+Tested on the interdigitated pair the plan asked for (`connectionCompartments.test.ts`): a T-bar
+100 nm from the partner's axon and its PSD on the partner's dendrite. That synapse is
+axo-dendritic from both ends and axo-axonic from the T-bar alone. Also tested through the
+scheduler on the mock: all-axon skeletons give every edge `weightAxonAxon` = `synapses` =
+Connectivity's `weight`.
 
 ### Both ends of a synapse: a change to the seam
 
@@ -168,6 +219,28 @@ plausible counts with nothing to say they are wrong, the same failure class as t
 
 `capabilities` gains `synapseBothEnds`. Where it is false, the node falls back to one coordinate
 for both ends and says so in `ctx.warn`, giving the number of synapses classified that way.
+
+*Built (phase 3), with one departure:* **no capability flag. The value says which ends arrived.**
+`SynapsesBetweenRequest.location` is a `SynapseDraw` (`'pre' | 'post' | 'both'`). Under `'both'`, a
+source with both ends answers `synapsesBetweenSchema('both')`: the six columns plus
+`partnerX/Y/Z` (f64, nm), drawn at the presynaptic site with `polarity` `pre`. A source with one
+position (CATMAID's connector, a Custom table) answers with `SYNAPSES_BETWEEN_SCHEMA`, and phase 4
+reads the columns' absence. The flag would have been 17 capability literals saying something the
+value already says, and a flag is a promise a source can break silently, whereas a missing column
+cannot be misread. The Synapses Between node does not offer `'both'`: its `Location` still picks
+one end.
+
+Measured live with every row checked (`live.test.ts`, both backends):
+
+| Backend | Synapses | Median gap, pre→post | Largest gap |
+| --- | --- | --- | --- |
+| neuPrint, male-CNS body 10003 | 30,020 | 197 nm | 545 nm |
+| CAVE, FlyWire 783 | 9,161 | 118 nm | 569 nm |
+
+The tests assert every gap is under 1 µm and the median is above 0, which catches the same column
+read twice. In the mock, a `'both'` row is the `'pre'` row with the `'post'` row's point beside
+it. The two ends are generated on their own arbours rather than near each other, which is all
+classification needs.
 
 ### Output layouts
 
@@ -272,9 +345,12 @@ this neuron". A click opens a small menu: "From here outward → axon / dendrite
 so the card keeps its threshold rows. It is drawn on every full-size surface (the overlay, the
 dock, a dashboard cell), and is `fullSizeOnly`: never the inspector's `summary`, which keeps its
 geometry preview. The tree a correction is measured over is `splitArbor`, cached on the geometry's
-arrays so neither the node nor the editor rebuilds it per click. Known limit: it carries no heal
-bridges, so with Heal on a correction reaches only the fragment holding the root, the one the
-editor draws. One on another fragment counts stale.
+arrays so neither the node nor the editor rebuilds it per click. *Fixed 2026-10-10:* a split
+neuron that arrived in pieces is drawn, and corrected, on its healed tree (`arborHeal.ts`, cached
+per geometry so the node's new item per correction does not re-heal). Built from the
+delivered parents, the arbour reached only the fragment holding the root, and once the root was the
+soma that could be almost nothing: male-CNS 36723's soma is a 17-node fragment of 1,767 nodes, drawn
+as a three-armed star. The output geometry stays as delivered.
 `SNAP_NM` is 2 µm. "Towards the root" became **everything else**, the complement of the subtree,
 as the splitter's proximal is. The cache holds 8 settings per skeletons value. *Built, later:* the editor draws the **unrooted** layout (`equalAngle`, with the
 dendrogram's daylight passes), and the click menu can **re-root** at the nearer end of the clicked
@@ -330,9 +406,13 @@ piece writes the expected entry.
 1. **Value + lib**: the field, `skeletonBuffers`, `compartmentOps.splitSkeletons`, Topology moved
    onto it (no behaviour change; `probe:split` covers only the Python, so the check is `compartmentOps.test.ts` on the bookkeeping either side of the bridge), and Clean's drop.
 2. **Split node + 3D mode + mock segregation.** Usable end to end on the demo dataset.
-3. **Seam**: `location: 'both'` on neuPrint, CAVE and mock, plus the capability.
-4. **Connection node**, both layouts.
-5. Help, glyphs, See also, and the assistant.
+3. **Seam**: `location: 'both'` on neuPrint, CAVE and mock. *Built*; no capability, see above.
+4. **Connection node**, both layouts. *Built*; see Node 2.
+5. Help, glyphs, See also, and the assistant. *Built 2026-10-11*: the help page, a glyph,
+   two See Also groups, `producedBy` on the node's `Skeletons` port (0/5 → 8/10 live), and a
+   curated demo (`wizard/curated.ts`): the searched one wired bare skeletons for Find Neurons'
+   neurons, so every synapse came out unsplit. In a browser the curated one counts 810 synapses on
+   the synthetic T4a, 524 axo-dendritic and none unsplit.
 
 ## Open questions
 

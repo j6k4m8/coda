@@ -32,9 +32,14 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { onCacheChange } from '../../data/cache'
-import { dropDatasetCache, peekDatasetCache } from '../../data/neuronIndex'
+import {
+  NEURON_INDEX_MAX_AGE_MS,
+  dropDatasetCache,
+  peekDatasetCache,
+} from '../../data/neuronIndex'
 import type { DatasetAnnotations } from '../../core/values'
 import { reloadNeuronIndex, useNeuronIndexState } from '../useNeuronIndex'
+import { ContextMenu } from '../menu/ContextMenu'
 import { CacheAge } from './CacheAge'
 
 export interface DatasetCacheAgeProps {
@@ -55,6 +60,7 @@ export interface DatasetCacheAgeProps {
 
 export function DatasetCacheAge({ sourceId, datasetId, annotations }: DatasetCacheAgeProps) {
   const [savedAt, setSavedAt] = useState<number | undefined>(undefined)
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | undefined>()
   const index = useNeuronIndexState(sourceId, datasetId, annotations)
 
   /*
@@ -115,11 +121,58 @@ export function DatasetCacheAge({ sourceId, datasetId, annotations }: DatasetCac
   }
 
   return (
-    <CacheAge
-      fetchedAt={savedAt}
-      onRefresh={refresh}
-      empty="no cache"
-      title="Neuron index, region outlines and summaries for this dataset"
-    />
+    <>
+      <CacheAge
+        fetchedAt={savedAt}
+        onRefresh={refresh}
+        empty="no cache"
+        title="Neuron index, region outlines and summaries for this dataset"
+        onMenu={setMenuAt}
+      />
+      {menuAt && (
+        <SharedCacheMenu at={menuAt} onRefresh={refresh} onClose={() => setMenuAt(undefined)} />
+      )}
+    </>
+  )
+}
+
+/**
+ * The right-click on this card's age, and why it offers no lifetime.
+ *
+ * Every other card's `cached 3d ago` opens **Cache lifetime** (`CacheLifetimeMenu`), so the same
+ * gesture here has to open *something*, or the two labels look alike and behave differently with
+ * nothing to say why. What it cannot offer is a lifetime: the copy it speaks for is shared by every
+ * card on the dataset and read by Explore, Find Neurons and the summaries rather than by this node,
+ * so a choice stored here would reach none of them. So it says that, in a caption rather than a
+ * disabled row — a disabled row reads as a control that is unavailable *right now*.
+ */
+function SharedCacheMenu({
+  at,
+  onRefresh,
+  onClose,
+}: {
+  at: { x: number; y: number }
+  onRefresh: () => void
+  onClose: () => void
+}) {
+  return (
+    <ContextMenu at={at} onClose={onClose} portal label="Dataset cache">
+      <div className="context-menu__caption context-menu__caption--wrap">
+        This cache is shared across all nodes for this dataset, so it has no per-node lifetime.
+        Kept for {NEURON_INDEX_MAX_AGE_MS / 86_400_000} days or until you trigger a refresh.
+      </div>
+      <div className="context-menu__sep" />
+      <button
+        type="button"
+        className="context-menu__item"
+        title="Forget everything downloaded for this dataset and fetch the neuron index again"
+        onClick={() => {
+          onClose()
+          onRefresh()
+        }}
+      >
+        Fetch Again Now
+      </button>
+    </ContextMenu>
   )
 }

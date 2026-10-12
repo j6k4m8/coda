@@ -13,20 +13,31 @@
 import { callPython } from './engine'
 import type { CallOptions } from './engine'
 import { float32From, int32From } from './types'
+import type { SplitStatus } from '../nodes/lib/splitStatus'
 
 /** Why a neuron has no split, per neuron. `0` is a split that worked. */
 export const SPLIT_OK = 0
 export const SPLIT_MULTIPLE_ROOTS = 1
 export const SPLIT_NO_SYNAPSES = 2
+/** Label propagation reached its iteration cap. The labels are kept, as navis keeps them. */
+export const SPLIT_NOT_CONVERGED = 3
 
-/** Why a neuron has no split, in words. One reader of the codes, beside the codes. */
-export type SplitStatus = 'ok' | 'multiple roots' | 'no synapses' | 'not split'
-
+/** A status code from Python, in words. One reader of the codes, beside the codes. */
 export function splitStatusOf(code: number | undefined): SplitStatus {
   if (code === SPLIT_MULTIPLE_ROOTS) return 'multiple roots'
   if (code === SPLIT_NO_SYNAPSES) return 'no synapses'
+  if (code === SPLIT_NOT_CONVERGED) return 'not converged'
   return 'ok'
 }
+
+/**
+ * The split methods Python runs: navis's flow centrality, or its label propagation. The card's own
+ * method list (`compartmentOps.ts`' `SplitMethod`) can name methods that never reach the bridge.
+ */
+export type PythonSplitMethod = 'flow' | 'propagation'
+
+/** navis's `use_weights` for the propagation: balanced counts, raw counts, or every seed equal. */
+export type PropagationWeighting = 'balance' | 'count' | 'none'
 
 /**
  * A set of skeletons flattened for one crossing, with per-node synapse counts.
@@ -50,13 +61,13 @@ export type SplitCompartmentsRequest = {
    * The linker is every node at or above this fraction of peak flow. navis's default is 0.9, and
    * its own docstring says to lower it for atypical or poorly segregated neurons.
    */
-  flowThresh: number
+  flowThresh?: number
   /**
    * The pre/post fraction ratio at or above which a component is called axon. navis's default is
    * 1, and it is spelled inside navis's `split` argument — `split='prepost:0.5'` — which is why
    * it is easy to miss that the knob exists. Above 1 biases towards dendrite, below towards axon.
    */
-  splitVal: number
+  splitVal?: number
   /**
    * Join a skeleton that arrived in several pieces into one tree before splitting it — fastcore's
    * `heal_skeleton`, no distance cap. Without it such a neuron comes back `multiple roots`. Off by
@@ -64,15 +75,34 @@ export type SplitCompartmentsRequest = {
    */
   heal: boolean
   /**
-   * xyz interleaved, one per node in the order of `parents`. Read only when `heal` is on — healing
-   * is the one step that needs to know where a node *is* — and sent empty otherwise.
+   * xyz interleaved, one per node in the order of `parents`. Read only when healing or propagating
+   * labels (whose edges are weighted by length), the two steps that need to know where a node
+   * *is*, and sent empty otherwise.
    */
   points: Float32Array
+  /**
+   * Per neuron, the neuron-local soma node (`packSkeletons`') or `-1`. The tree is rerooted there,
+   * after any heal, before flow is computed — navis's `reroot_soma=True`: flow's branch-point
+   * correction reads which way the tree points.
+   */
+  somas: Int32Array
   /**
    * Send back the synapse flow per node — the number the linker threshold is applied to. Off for
    * every caller that only wants the labels: a float per node is the largest thing this returns.
    */
   flow?: boolean
+  /** Flow centrality, or label propagation. Absent is flow, which every caller before it meant. */
+  method?: PythonSplitMethod
+  /** Label propagation's seed weights (navis's `use_weights`). */
+  weighting?: PropagationWeighting
+  /** Label propagation's clamping: 0 holds the seeds fixed, 1 lets them change. */
+  alpha?: number
+  /** Label propagation's iteration cap. */
+  maxIter?: number
+  /** Label propagation's stop: ≥ 1 is iterations with unchanged labels, below 1 a score change. */
+  tol?: number
+  /** Send back each node's propagation probability (the larger of its two normalised scores). */
+  probability?: boolean
 }
 
 export interface SplitCompartmentsResult {
@@ -82,6 +112,8 @@ export interface SplitCompartmentsResult {
   status: Int32Array
   /** Per node, navis's flow as the split used it; only when the request asked for it. */
   flow?: Float32Array
+  /** Per node, the propagation's probability; only when the request asked for it. */
+  probability?: Float32Array
 }
 
 /** Split a whole set of skeletons into axon, dendrite and linker in one call. */
@@ -130,5 +162,17 @@ export async function runSplitCompartments(
     )
   }
 
-  return { compartment, status, ...(flow ? { flow } : {}) }
+  const probability = request.probability ? float32From(result, 'probability') : undefined
+  if (probability && probability.length !== nodeCount) {
+    throw new Error(
+      `Compartment split returned ${probability.length} probabilities for ${nodeCount} nodes`,
+    )
+  }
+
+  return {
+    compartment,
+    status,
+    ...(flow ? { flow } : {}),
+    ...(probability ? { probability } : {}),
+  }
 }

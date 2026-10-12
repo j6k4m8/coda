@@ -8,8 +8,8 @@
  * value carries.
  */
 
-import type { TableValue } from '../../core/values'
-import { getColumn } from '../../core/values'
+import type { MatrixLine, TableValue } from '../../core/values'
+import { getColumn, neuronLines } from '../../core/values'
 
 /** Any geometry collection: index-aligned items and attribute rows. */
 export interface LabelledItems {
@@ -49,4 +49,16 @@ export function matrixAxisLabels(
 ): [string[], string[]] {
   const rows = geometryLabels(query, column)
   return target ? [rows, geometryLabels(target, undefined)] : [rows, rows]
+}
+
+/**
+ * Each axis' lines, by the items' neuron ids — `matrixAxisLabels`' sides, so the labels and what
+ * they stand for cannot disagree about which side is which. An all-by-all shares one array.
+ */
+export function matrixAxisLines(
+  query: { items: readonly { id: string }[] },
+  target: { items: readonly { id: string }[] } | undefined,
+): { rows: MatrixLine[]; cols: MatrixLine[] } {
+  const rows = neuronLines(query.items.map((item) => item.id))
+  return { rows, cols: target ? neuronLines(target.items.map((item) => item.id)) : rows }
 }

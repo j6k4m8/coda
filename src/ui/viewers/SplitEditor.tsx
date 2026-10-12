@@ -74,6 +74,8 @@ import { useElementSize } from './useElementSize'
 import { usePanGesture } from './usePanGesture'
 import { useWheelZoom } from './useWheelZoom'
 import { ViewerEmpty } from './ViewerEmpty'
+import { TopoName } from './topoChrome'
+import { useHealedSkeleton } from './useHealedSkeleton'
 
 export interface SplitEditorProps {
   /** The node's `Skeletons` output: labelled, corrections applied. */
@@ -133,6 +135,15 @@ export function SplitEditor({
   const stored = useMemo(() => readCorrections(corrections), [corrections])
   const mine = stored.filter((c) => c.neuron === skeleton?.id)
 
+  /*
+   * A split skeleton that arrived in pieces was healed to be split, so it is drawn on the same join
+   * the node's corrections are applied on (`correctionTrees`): the delivered parents reach only the
+   * fragment the root is on. See `docs/compartments-plan.md` for the neuron that showed it.
+   */
+  const heal = useHealedSkeleton(skeleton?.split ? skeleton : undefined)
+  const drawn =
+    heal.status === 'ready' ? heal.data.skeleton : heal.status === 'idle' ? skeleton : undefined
+
   /* --- the root ----------------------------------------------------------------------- */
 
   /*
@@ -149,9 +160,9 @@ export function SplitEditor({
       ? chosen.at
       : [...mine].reverse().find((c) => c.root)?.root
   const rootNode = useMemo(() => {
-    const node = skeleton && rootAt ? snapToNode(skeleton, rootAt) : -1
+    const node = drawn && rootAt ? snapToNode(drawn, rootAt) : -1
     return node >= 0 ? node : undefined
-  }, [skeleton, rootAt])
+  }, [drawn, rootAt])
 
   /* --- the arbour, rooted where the corrections are measured from ------------------------- */
 
@@ -160,7 +171,7 @@ export function SplitEditor({
    * untouched, so a correction — a new output, a new item object — returns the same arbour and
    * nothing below it is laid out again: only the colours change.
    */
-  const arbor = skeleton ? splitArbor(skeleton, rootNode) : undefined
+  const arbor = drawn ? splitArbor(drawn, rootNode) : undefined
   const tree = useMemo(() => (arbor ? keyTree(arbor) : undefined), [arbor])
   const landmarkD = useMemo(
     () => (tree && arbor ? landmarkDistances(tree, arbor.geodesic) : undefined),
@@ -206,7 +217,7 @@ export function SplitEditor({
 
   const byNeuron = useMemo(() => (synapses ? sitesByNeuron(synapses) : undefined), [synapses])
   const sites = skeleton ? byNeuron?.get(skeleton.id)?.sites : undefined
-  const projection = skeleton && sites ? projectionOf(skeleton, sites) : undefined
+  const projection = drawn && sites ? projectionOf(drawn, sites) : undefined
   const placement = useMemo(
     () => (arbor && projection ? orientPlacement(arbor, projection) : undefined),
     [arbor, projection],
@@ -380,9 +391,7 @@ export function SplitEditor({
           onStep={(delta) => setPage(index + delta)}
           unit="neuron"
         />
-        <span className="topo__name" title={id}>
-          {neuronName}
-        </span>
+        <TopoName name={neuronName} neuronId={id} />
         {segregation !== undefined && (
           <span
             className="topo__count"
@@ -429,7 +438,11 @@ export function SplitEditor({
           onClick={onClick}
           onDoubleClick={() => setView(undefined)}
         >
-          {labels ? (
+          {heal.status === 'healing' ? (
+            <ViewerEmpty>Joining the skeleton’s {heal.pieces} pieces…</ViewerEmpty>
+          ) : heal.status === 'error' ? (
+            <ViewerEmpty>Could not join the skeleton’s pieces: {heal.message}</ViewerEmpty>
+          ) : labels ? (
             <canvas
               ref={canvasRef}
               className="arbor__canvas"

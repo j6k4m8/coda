@@ -154,9 +154,30 @@ constant in `embedOps.ts` whose comment already said "so the two tables join", a
 `clusterSchema`, and a third here — so it is now one in `tableOps.ts`, on `ID_COLUMN_NAME`'s
 rule: a constant earns its place by linking the sites where a mismatch fails **silently**, and
 a table that spelled this differently would still join, only after somebody set two pickers.
-Deliberately not `neuronId`: a matrix's row labels are whatever the node above put there, which
-after a Heatmap relabel or a Pivot is a cell type, and `neuronId` is a claim (invariant 8) every
-id node downstream would then act on.
+The key stays `label`, and that is still deliberate: a matrix's row labels are whatever the node
+above put there, which after a Heatmap relabel or a Pivot is a cell type.
+
+**`neuronId` sits beside it, and it is filled only from what a matrix records.** Attach
+Attributes matched a reduction on `label` by hand, which per neuron on neuPrint is `T4a 12345` and
+matched nothing. That is how the curated Reduce Matrix example worked only on the demo dataset,
+whose labels happen to be bare ids. `neuronId` is a claim (invariant 8) every id node downstream
+acts on, so it comes from `MatrixValue.lines` and never from a label, not even one that looks like
+an id. Reading id-like labels was tried first and refused: `0`, `1`, `2` on a timestep or hop axis
+pass as ids. The matrices that record lines are Adjacency per neuron, NBLAST, syNBLAST, Distance,
+a Similarity over `neuronId` (not `isIdentifierColumn`, which also passes `roiId` and
+`connectorId`), and Neurons to ZapBench Traces, whose rows
+take the input's `neuronId` and never its ZapBench cell number, a different numbering. Normalize
+keeps them. Anything that reorders a matrix (Heatmap, Linkage's `ordered`) drops them for now,
+and its `neuronId` reads null. **Because the column always exists, Attach Attributes' default
+stays on it** where `label` used to be picked by falling back. An all-null key or a join that
+matches nothing is therefore warned about in Attach Attributes itself (`noMatchWarning`), from
+whatever source. **The exporters cannot see lines**, so the matrix type carries
+`neurons: {rows, cols}` from the same builders' `inferOutputs` (Normalize passes it through),
+except ZapBench traces, which no exporter takes and which therefore declares nothing.
+`reducedAxisIsNeurons` reads it, and an exporter writes the label as `neuronId` only on such an
+axis and only where the label is an id: a `Label by` column can make an NBLAST's labels types, and
+those are null on the canvas too. The column is always declared, since a matrix type has no
+schema to decide it from.
 
 **The prefix is a param rather than a downstream Rename** because two of these meeting at one
 Join is the ordinary case: `mean` and `max` from a trace matrix beside `mean` and `max` from an
@@ -300,7 +321,8 @@ after this needs a load-time alias kept forever.
 
 `neuron.adjacency` emits **two outputs describing one fetch**, which is `neuron.roiConnectivity`'s
 arrangement and `core.pivot`'s before it. `Matrix` is what the Heatmap takes; `Links` is the same
-connections long — `source`, `target`, `weight` — so they sort, filter, join and export.
+connections long, in Connectivity's columns — `preId`, `preType`, `postId`, `postType`, `weight` —
+so they sort, filter, join and export, and feed every node that reads an edge list by id.
 
 The `Links` port was added because a connection matrix was otherwise a **dead end for everything
 that thinks in links**. Of the ten nodes that touch a `Matrix`, the four that consume one produce
@@ -324,20 +346,50 @@ keeping the zeros would emit `rows × cols` rows — 250,000 for a 500 × 500 ad
 zero — and `Build Network` would turn that into a complete graph with a zero-weight link between
 every pair. That is not a large answer; it is a different one.
 
-**Matching column names buy recognition, not resolution**, and this is worth knowing because the
-opposite assumption costs a wrong graph rather than an error. `net.build`'s `Source` and `Target`
-declare `default: ''`, which the resolver reads as "first compatible column" and not as "the
-column with my name" — so on this table both land on `source`, every link becomes a self-loop, and
-the network comes out with no edges between anything. `Weight` is `optional`, so empty stays empty
-and every link weighs 1 rather than its synapse count. Set Target and Weight on Build Network.
-`adjacency.test.ts` pins that behaviour, so if `net.build` ever gains named defaults the test is
-what says the wire became zero-configuration.
+**The id columns hold ids, never the matrix's labels.** `Links` was `source`, `target`, `weight`
+once, holding each line's *label*: per neuron that is a display string, `KCg-d 19102` on neuPrint
+and the bare id elsewhere. Connection Compartments fed one looked up a neuron called `KCg-d 19102`,
+fetched nothing, and reported every edge's `weight` as disagreeing with a count of zero (2,970
+edges on the workflow that found it). So **the source that writes a label also writes what the
+line is**: `MatrixValue.lines`, one `{id, type}` per row and column. `fetchAdjacency` returns an
+`AdjacencyMatrix`, on which `lines` is required, so a source cannot hand over labels alone. Every
+source folds through `matrixFromEdges` (`data/connectivity.ts`), whose private `axisLines` is the
+one statement of the key rule. neuPrint passes a label function for its `type id` display labels.
+Labels are never parsed back. A first version did parse them, matching each label's last word
+against the requested ids, which held only while every source happened to end its label with the
+id. **Per neuron a line's type is filled where it is free.** neuPrint, CATMAID and the mock have
+types in hand. CAVE and the edge-set path look them up only to group, because per neuron that
+costs the whole neuron index cold (139,255 rows on FlyWire) for a label column. A line they leave
+untyped takes the wired tables' type in `matrixToLinks` (`typesOf`, memoised). Always looking it
+up was tried for one round and reverted. The shared fold also made CATMAID's grouping sum: it had
+written one row per neuron under its type's name, the label repeated and nothing summed. Lines are
+in first-seen order on every source; the mock sorted its labels once, and no longer does.
+**Grouped by type a line is a type**, so `preId`/`postId` are empty and
+`preType`/`postType` name the ends. An untyped neuron grouped by type is a line of its own,
+labelled by its id, and keeps it. Anything that rebuilds a matrix (Normalize, a reorder) goes
+through `makeMatrix` without `lines` and so drops them rather than carrying stale ones.
+
+**`Group by type` defaults to off**, since Links carries real ids: per neuron is the form every
+id-reading node downstream takes with nothing picked. It defaulted to on before, so it carries
+`absentMeans: true`, and a stored node without the key still groups. The readers ask
+`=== true` (node and both exporters), never `!== false`, which was a second copy of the old
+default.
+
+**Build Network needs nothing picked on these Links, per neuron.** Its `Source`, `Target` and
+`Weight` default to `preId`, `postId` and `weight`. They were `''` once, which the resolver reads
+as "first compatible column" for both ends, so every edge list came out as self-loops until
+somebody set `Target`. A stored `''` reads as the named default now, which changes only that
+broken case. `Weight` is optional, so a stored or missing `''` stays off and only new cards get
+`weight`. Grouped by type the ids are empty, so somebody picks `preType`/`postType`.
+`buildNetwork.test.ts` sweeps every producer of Connectivity's edge list.
 
 **The exporters bind both ports**, and the two languages get there differently. Python emits the
 long half from `_conn` — `fetch_adjacencies`' own connection table, grouped by the same key —
 rather than melting the matrix back down, and the two agree because a connection table has no zero
 rows to drop. R melts `neuprint_get_adjacency_matrix`'s result and strips the zeros, which is
-`matrixToLinks` transcribed.
+`matrixToLinks` transcribed. Both write Connectivity's columns with ids through `coda_ids`. R's
+matrix is per body whatever `Group by type` says, so its axis names are the ids and its types come
+from `neuprint_get_meta`. Python grouped by type leaves the ids empty, as the canvas does.
 
 ## Heatmap: three tabs are data, the Colour tab is not
 

@@ -43,7 +43,7 @@
  */
 
 import type {
-  MatrixValue,
+  AdjacencyMatrix,
   MeshDetail,
   MeshesValue,
   SkeletonGeometry,
@@ -642,7 +642,7 @@ export class PrecomputedSource implements DataSource {
     return this.noConnectivity()
   }
 
-  fetchAdjacency(_req: AdjacencyRequest): Promise<MatrixValue> {
+  fetchAdjacency(_req: AdjacencyRequest): Promise<AdjacencyMatrix> {
     return this.noConnectivity()
   }
 

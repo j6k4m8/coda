@@ -31,6 +31,12 @@ operations break that: `resample_skeleton` mints fresh ids counting from `max + 
 therefore go through `_reindex`, which is the one thing in this file that would fail silently
 if it were skipped — parents pointing at ids nobody re-based still *draw*, as a neuron whose
 branches have been shuffled.
+
+## The second entry point
+
+`coda_simplify_skeletons` is Simplify Skeletons: prune twigs, then thin. Both keep a subset of
+the nodes and move none, so it returns *which rows survived* rather than geometry, and the
+JavaScript gathers everything per node through that list (`simplifyOps.ts`).
 """
 
 import numpy as np
@@ -61,7 +67,18 @@ def _reindex(node_ids, parent_ids):
     return np.where(parent_ids >= 0, lookup[np.maximum(parent_ids, 0)], -1).astype(np.int32)
 
 
-def _clean_one(coords, parents, radii, labels, opts):
+def _reroot_at(ids, parents, soma):
+    """`parents` rerooted at `soma`, or as they are where it is -1 or already the root.
+
+    `topology.py` holds the same three lines for the split: each module runs in a namespace of its
+    own (`runtime.ts`), so neither can call the other's.
+    """
+    if soma < 0 or parents[soma] < 0:
+        return parents
+    return np.asarray(fc.reroot(ids, parents, [soma]), dtype=parents.dtype)
+
+
+def _clean_one(coords, parents, radii, labels, opts, soma):
     """One neuron through the whole pipeline. Coordinates float64, radii float64, labels uint8.
 
     Returns `(coords, parents, radii, labels)` with parents already re-based onto row numbers.
@@ -89,6 +106,8 @@ def _clean_one(coords, parents, radii, labels, opts):
             ),
             dtype=np.int64,
         )
+        # `heal_skeleton` keeps the largest fragment's root; the soma takes it back.
+        parents = _reroot_at(ids, parents, soma)
 
     if opts["smooth"] > 0 and n > 2:
         # Coordinates only. `values=` would let a radius ride along in the same pass, and
@@ -140,6 +159,20 @@ def _clean_one(coords, parents, radii, labels, opts):
     return coords, np.ascontiguousarray(parents, dtype=np.int32), radii, labels
 
 
+def _joined(parts, dtype):
+    """Per-neuron arrays as one flat array of `dtype`, cast during the concatenate.
+
+    `dtype=` on the concatenate rather than a narrowing `ascontiguousarray` after it. fastcore
+    works in float64 throughout, so the obvious spelling materialises the whole result in float64
+    and then copies it down — 120 MB of transient at the five-million node ceiling
+    `checkResampleSize` warns at, to deliver 60 MB. Casting during the concatenate allocates once.
+    `np.concatenate` has taken `dtype` since numpy 1.20.
+    """
+    if not parts:
+        return np.zeros(0, dtype=dtype)
+    return np.concatenate(parts, dtype=dtype).ravel()
+
+
 def coda_clean_skeletons(request, report=None):
     """A whole set of skeletons through the pipeline, in one crossing.
 
@@ -161,6 +194,7 @@ def coda_clean_skeletons(request, report=None):
     rad = np.frombuffer(req["radii"], dtype=np.float32).astype(np.float64)
     lab = np.frombuffer(req["compartments"], dtype=np.uint8)
     off = np.frombuffer(req["offsets"], dtype=np.int32)
+    somas = np.frombuffer(req["somas"], dtype=np.int32)
     count = len(off) - 1
 
     opts = {
@@ -183,7 +217,7 @@ def coda_clean_skeletons(request, report=None):
         a, b = int(off[i]), int(off[i + 1])
         if b > a:
             coords, parents, radii, labels = _clean_one(
-                np.ascontiguousarray(xyz[a:b]), par[a:b], rad[a:b], lab[a:b], opts
+                np.ascontiguousarray(xyz[a:b]), par[a:b], rad[a:b], lab[a:b], opts, int(somas[i])
             )
             out_coords.append(coords)
             out_parents.append(parents)
@@ -194,23 +228,178 @@ def coda_clean_skeletons(request, report=None):
         if report is not None and (i % 8 == 7 or i == count - 1):
             report((i + 1) / max(1, count), f"{i + 1} of {count} neurons")
 
-    def joined(parts, dtype):
-        # `dtype=` on the concatenate rather than a narrowing `ascontiguousarray` after it.
-        # fastcore works in float64 throughout, so the obvious spelling materialises the whole
-        # result in float64 and then copies it down — 120 MB of transient at the five-million
-        # node ceiling `checkResampleSize` warns at, to deliver 60 MB. Casting during the
-        # concatenate allocates once. `np.concatenate` has taken `dtype` since numpy 1.20.
-        if not parts:
-            return np.zeros(0, dtype=dtype)
-        return np.concatenate(parts, dtype=dtype).ravel()
-
     return {
         # float32 out, matching the geometry buffers on the other side. fastcore works in
         # float64 and the narrowing happens here, on the wasm heap, rather than doubling what
         # crosses the bridge to deliver precision `Float32Array` cannot hold.
-        "points": joined(out_coords, np.float32),
-        "parents": joined(out_parents, np.int32),
-        "radii": joined(out_radii, np.float32),
-        "compartments": joined(out_labels, np.uint8),
+        "points": _joined(out_coords, np.float32),
+        "parents": _joined(out_parents, np.int32),
+        "radii": _joined(out_radii, np.float32),
+        "compartments": _joined(out_labels, np.uint8),
+        "offsets": np.ascontiguousarray(offsets, dtype=np.int32),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Simplify: prune twigs, then thin
+# ---------------------------------------------------------------------------
+#
+# Both operations *keep a subset* of the nodes and move none of them, which is the whole
+# difference from the cleaning pipeline above and the reason this returns no coordinates at
+# all: what comes back is, per neuron, which of its original rows survive (`keep`) and their
+# parents as rows of the survivors. The JavaScript side gathers positions, radii, labels, a
+# computed split and per-node values through `keep`, exactly — nothing is interpolated, so
+# nothing has to cross twice.
+
+
+def _edge_lengths(coords, parents):
+    """Each node's distance to its parent, 0 for a root — `prune_twigs`' `weights`.
+
+    Without them fastcore counts an edge as 1, so a threshold would be a number of *nodes* and
+    mean something different on every reconstruction.
+    """
+    has_parent = parents >= 0
+    lengths = np.zeros(len(parents), dtype=np.float32)
+    delta = coords[has_parent] - coords[parents[has_parent]]
+    lengths[has_parent] = np.sqrt((delta * delta).sum(axis=1))
+    return lengths
+
+
+def _unbranched(parents):
+    """Per node, whether its whole fragment (connected component) has no branch point.
+
+    fastcore labels a component by its root's id, and the ids are row numbers, so a component
+    label indexes a table of length `n` directly.
+    """
+    n = len(parents)
+    component = np.asarray(fc.connected_components(np.arange(n), parents))
+    branched = np.zeros(n, dtype=bool)
+    branched[component[np.bincount(parents[parents >= 0], minlength=n) >= 2]] = True
+    return ~branched[component]
+
+
+def _prune(parents, lengths, soma, threshold, repeat):
+    """Rows (into the neuron) that survive pruning twigs shorter than `threshold`, and their
+    parents as rows of the survivors.
+
+    **fastcore's `mask` is per node and `True` means *may be pruned*** — its docstring reads the
+    other way round, and the probe pins which. A twig is eaten from its tip towards its branch
+    point and the walk stops at the first node that may not go. Two things are protected:
+
+    - **The soma.** Where it is a twig's tip — the usual place when it is not the root — that
+      twig is kept whole; where it sits part way along one, the walk stops at it.
+    - **A fragment with no branch point**, all of it. fastcore never treats a root as a twig
+      tip, but a cable with no branch point is nothing *but* twig, so an unbranched neuron
+      shorter than the threshold would come back empty. This removes twigs from trees; joining
+      or dropping fragments is not its question. Recomputed every pass, because pruning a
+      tree's last short side branch leaves it unbranched.
+
+    `repeat` is navis' `recursive=True`: removing a twig can leave the branch it hung from as a
+    new, short twig, and one pass does not see it. Each pass removes nodes or ends the loop.
+    """
+    alive = np.arange(len(parents))
+    current = parents
+    while True:
+        # In `current`'s dtype: `_reindex` hands back int32, and fastcore re-casts both arrays
+        # whenever ids and parents disagree.
+        ids = np.arange(len(alive), dtype=current.dtype)
+        prunable = ~_unbranched(current)
+        prunable[alive == soma] = False
+        kept = np.asarray(
+            fc.prune_twigs(ids, current, threshold, weights=lengths[alive], mask=prunable),
+            dtype=np.int64,
+        )
+        if len(kept) == len(alive):
+            return alive, current
+        # A twig goes from its tip back to a branch point, so every survivor's parent survived
+        # too, and the sub-tree's parents re-index onto the survivors without a dangling one.
+        current = _reindex(kept, current[kept])
+        alive = alive[kept]
+        if not repeat:
+            return alive, current
+
+
+def _simplify_one(coords, parents, opts, soma):
+    """`(keep, parents)` for one neuron: surviving rows in their original order, and their
+    parents as rows of `keep`."""
+    n = len(parents)
+    parents = np.asarray(parents, dtype=np.int64)
+    alive = np.arange(n)
+    current = parents
+
+    if opts["prune"] > 0 and n > 1:
+        alive, current = _prune(
+            parents, _edge_lengths(coords, parents), soma, opts["prune"], opts["repeat"]
+        )
+
+    # `none` wherever the card's settings remove nothing: `simplifyOps.thins` decides, once.
+    method = opts["method"]
+    if method == "none" or len(alive) < 2:
+        return alive, current
+    ids = np.arange(len(alive), dtype=current.dtype)
+    # Roots, branch points and leaves survive all three on fastcore's own rule; the soma is the
+    # one more node that must, and it is usually a mid-cable node of none of those kinds.
+    where = np.flatnonzero(alive == soma)
+    preserve = where if len(where) else None
+    if method == "every":
+        kept, new_parents, _w, _map = fc.downsample_skeleton(
+            ids, current, opts["factor"], preserve=preserve
+        )
+    else:
+        thin = fc.simplify_rdp if method == "rdp" else fc.simplify_vw
+        threshold = opts["tolerance"] if method == "rdp" else opts["area"]
+        # No copy of the neuron when pruning removed nothing.
+        points = coords if len(alive) == n else coords[alive]
+        kept, new_parents, _w, _map = thin(ids, current, points, threshold, preserve=preserve)
+    # All three return parents as *ids* of the survivors with gaps in the numbering, the
+    # failure `_reindex` exists for.
+    return alive[kept], _reindex(kept, new_parents)
+
+
+def coda_simplify_skeletons(request, report=None):
+    """A whole set through prune-then-thin, in one crossing.
+
+    Pruning goes first because it measures twigs along the cable as traced; thinning first
+    would cut the corners off every twig and make each one shorter than it is. The item count
+    never changes, `coda_clean_skeletons`' rule and reason.
+    """
+    req = request.to_py()
+
+    xyz = np.frombuffer(req["points"], dtype=np.float32).reshape(-1, 3).astype(np.float64)
+    par = np.frombuffer(req["parents"], dtype=np.int32)
+    off = np.frombuffer(req["offsets"], dtype=np.int32)
+    somas = np.frombuffer(req["somas"], dtype=np.int32)
+    count = len(off) - 1
+
+    opts = {
+        "prune": float(req["prune"]),
+        "repeat": bool(req["repeat"]),
+        "method": str(req["method"]),
+        "factor": int(req["factor"]),
+        "tolerance": float(req["tolerance"]),
+        "area": float(req["area"]),
+    }
+
+    out_keep = []
+    out_parents = []
+    offsets = [0]
+    at = 0
+
+    for i in range(count):
+        a, b = int(off[i]), int(off[i + 1])
+        if b > a:
+            keep, parents = _simplify_one(
+                np.ascontiguousarray(xyz[a:b]), par[a:b], opts, int(somas[i])
+            )
+            out_keep.append(keep)
+            out_parents.append(parents)
+            at += len(keep)
+        offsets.append(at)
+        if report is not None and (i % 8 == 7 or i == count - 1):
+            report((i + 1) / max(1, count), f"{i + 1} of {count} neurons")
+
+    return {
+        "keep": _joined(out_keep, np.int32),
+        "parents": _joined(out_parents, np.int32),
         "offsets": np.ascontiguousarray(offsets, dtype=np.int32),
     }

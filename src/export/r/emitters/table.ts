@@ -6,7 +6,7 @@
  * if missed are the same three, and each is marked where it is handled.
  */
 
-import { ID_COLUMN_NAME } from '../../../core/ids'
+import { ID_COLUMN_NAME, ID_PATTERN } from '../../../core/ids'
 import type { CellValue } from '../../../core/values'
 import type { DType } from '../../../core/types'
 import { columnNames } from '../../../core/types'
@@ -36,7 +36,11 @@ import { decodeRenames } from '../../../nodes/lib/renames'
 import { readAttach } from '../../../nodes/transform/attachAttributes'
 import { readSelection } from '../../../nodes/lib/selectNeurons'
 import type { ReduceStat } from '../../../nodes/lib/matrixReduce'
-import { readReduceOptions, reduceColumnName } from '../../../nodes/lib/matrixReduce'
+import {
+  readReduceOptions,
+  reduceColumnName,
+  reducedAxisIsNeurons,
+} from '../../../nodes/lib/matrixReduce'
 import { volumeColumnName } from '../../../nodes/lib/pointsInMeshes'
 import { edgePlanRefusal, groupColumns, readPlan } from '../../../nodes/lib/synapseEdges'
 import { rCol, rStr, rValue, rVector } from '../r'
@@ -1292,6 +1296,13 @@ registerEmitter('core.reduceMatrix', (ctx) => {
   }
 
   lines.push(`${out} <- data.frame(${col(LABEL_COLUMN_NAME)} = rownames(m_))`)
+  // `neuronId`: see `reducedAxisIsNeurons`.
+  const neurons = reducedAxisIsNeurons(ctx.inputType('in'), options.axis)
+  lines.push(
+    neurons
+      ? `${out}[[${rStr(ID_COLUMN_NAME)}]] <- ifelse(grepl(${rStr(`^${ID_PATTERN}$`)}, ${out}[[${rStr(LABEL_COLUMN_NAME)}]]), ${out}[[${rStr(LABEL_COLUMN_NAME)}]], ${R_NA.str})`
+      : `${out}[[${rStr(ID_COLUMN_NAME)}]] <- ${R_NA.str}`,
+  )
   for (const stat of options.stats) {
     lines.push(
       `${out}[[${rStr(reduceColumnName(stat, options.prefix))}]] <- ${REDUCE_EXPRESSIONS[stat]('m_')}`,

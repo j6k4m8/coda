@@ -26,7 +26,8 @@
  */
 
 import { packNode } from '../../core/registry'
-import { T } from '../../core/types'
+import { NEURONS_BOTH_AXES, T } from '../../core/types'
+import { matrixAxisLines } from '../../nodes/lib/geometryLabels'
 import type { NblastSymmetry } from '../../pyodide/nblast'
 import { runSynblast } from '../../pyodide/nblast'
 import { SYMMETRY_OPTIONS, nblastMatrix } from '../../nodes/lib/nblastOps'
@@ -93,9 +94,9 @@ export const synblastNode = packNode({
     }),
   ],
 
-  // A matrix carries no schema — its labels are data, decided by the run. `neuron.nblast`'s
-  // answer, and `core.pivot`'s for its Matrix half.
-  inferOutputs: () => ({ scores: T.matrix() }),
+  // A matrix carries no schema — its labels are data, decided by the run — so the kind and that
+  // both axes are neurons is all there is. `neuron.nblast`'s answer.
+  inferOutputs: () => ({ scores: T.matrix(NEURONS_BOTH_AXES) }),
 
   validate: (ctx) => {
     /*
@@ -152,6 +153,10 @@ export const synblastNode = packNode({
         // An all-by-all reuses the row labels, which is what makes that fallback visible here
         // rather than something a reader has to infer from two identical calls.
         target && targetGroups ? synapseLabels(target, targetGroups, undefined) : rowLabels,
+        matrixAxisLines(
+          { items: queryGroups },
+          target && targetGroups ? { items: targetGroups } : undefined,
+        ),
       ),
     }
   },

@@ -112,6 +112,101 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: readonly ChangelogEntry[] = [
   {
+    date: '2026-10-11',
+    title: 'Connections by compartment',
+    summary:
+      'The new Connection Compartments node counts each connection’s synapses by where they sit at either end: axo-dendritic, axo-axonic, dendro-dendritic and so on. Split Axon/Dendrite gains three more ways to split.',
+    highlight: true,
+    features: [
+      {
+        kind: 'node',
+        date: '2026-10-11',
+        title: 'Connection Compartments',
+        body:
+          '**Connection Compartments** takes an edge list, for example from Connectivity, and skeletons split by **Split Axon/Dendrite**. It fetches every synapse behind each edge and looks up the compartment at both ends: the presynaptic site on the presynaptic neuron’s split, the postsynaptic site on the postsynaptic one’s. Each edge then gets its synapses counted as axo-dendritic, axo-axonic, dendro-dendritic, dendro-axonic, linker or unsplit, either as a column per class or as a row per class.\n\n' +
+          'The **Synapses** output carries every synapse with its two compartments, so a 3D View coloured by `connection` shows where on the arbour each kind sits. Fetch the skeletons for Connectivity’s **Neuron Set**, so that the neurons at both ends of every edge are split.',
+        demo: 'connectome:connectionCompartments',
+      },
+      {
+        kind: 'node',
+        date: '2026-10-11',
+        title: 'Split Axon/Dendrite: label propagation, by ROI and by tag',
+        body:
+          '**Split Axon/Dendrite** has a **Method** control. Besides synapse flow there is **label propagation**, navis’s `split_axon_dendrite_prop`, which spreads labels out from where a neuron’s outputs and inputs sit and can write each node’s probability of being axon. **By ROI** labels the nodes inside the regions you wire into the new **Volumes** input as axon, or as dendrite, and the rest as the other; a **Margin** also counts nodes just outside a region. **By tag** reads the node tags CATMAID tracers place where the axon or the dendrite starts.\n\n' +
+          'By ROI and by tag do not need synapses. Hand corrections apply to every method.',
+      },
+    ],
+    items: [
+      {
+        kind: 'node',
+        date: '2026-10-11',
+        title: '**Simplify Skeletons** prunes short twigs and downsamples.',
+        body: 'Remove twigs shorter than a cable length, as navis’s `prune_twigs` does, optionally repeating until none are left. Then keep every Nth node, or drop only the nodes that do not bend the neurite (Ramer–Douglas–Peucker or Visvalingam–Whyatt). The soma, roots, branch points and leaves always survive, and an axon/dendrite split computed upstream comes through intact.',
+        demo: 'neuron.simplifySkeletons',
+      },
+      {
+        kind: 'changed',
+        date: '2026-10-11',
+        title: '**Clean Skeletons** no longer offers *keep every Nth node*.',
+        body: 'It is on **Simplify Skeletons** now. A saved workflow that uses it still runs it and gives the same result, with a note on the card saying how to switch.',
+      },
+      {
+        kind: 'data',
+        date: '2026-10-11',
+        title: 'CATMAID skeletons keep their node tags.',
+        body: 'Tags such as `soma`, `axon` or `ends` now come with each skeleton, and **Clean Skeletons** moves each one to the nearest node it keeps. A node tagged `soma` is the skeleton’s soma, so dendrograms, Topology and Split Axon/Dendrite measure from there.',
+      },
+      {
+        kind: 'editor',
+        date: '2026-10-11',
+        title: 'Choose how long a node keeps the data it downloaded.',
+        body: 'Right-click `cached 3d ago` on a card, or use **Cache Lifetime** in the node’s menu, to pick 1 hour, 1 day, 1 week, 30 days or **Don’t cache**. Once the data is older than that, the card says `expired`, and the next Run reads the server again and re-runs everything downstream.',
+      },
+    ],
+  },
+  {
+    date: '2026-10-10',
+    title: 'Skeletons rooted at the soma',
+    summary:
+      'neuPrint skeletons now mark their soma, and healing and Split Axon/Dendrite root a skeleton there.',
+    highlight: false,
+    items: [
+      {
+        kind: 'changed',
+        date: '2026-10-10',
+        title: 'Fragmented skeletons are rooted at the soma.',
+        body: 'neuPrint skeletons now label the node within 2 µm of the neuron’s `somaLocation` as its soma. **Clean Skeletons** (with **Heal**) and **Split Axon/Dendrite** reroot each skeleton at its soma after joining fragments, as navis does, instead of keeping the root of the largest fragment. Splits of neurons that were not rooted at their soma may change.',
+      },
+      {
+        kind: 'changed',
+        date: '2026-10-10',
+        title: '**Topology**’s longest path is measured from the soma.',
+        body: 'The Morphology tab’s longest path and Skeleton to Points’ `rootDistance` now measure from the labelled soma rather than from wherever the skeleton file starts. Fragments without the soma still measure from their own root.',
+      },
+    ],
+  },
+  {
+    date: '2026-10-08',
+    title: 'Adjacency, one neuron per row',
+    summary:
+      'Adjacency now starts with one row and column per neuron, its Links table uses the same columns as Connectivity, and Reduce Matrix tables join onto skeletons with no setup.',
+    highlight: false,
+    items: [
+      {
+        kind: 'changed',
+        date: '2026-10-08',
+        title: '**Adjacency** no longer groups by type unless you ask it to.',
+        body: 'A new Adjacency node starts with **Group by type** off, so its matrix has one row and column per neuron. Tick it for one per cell type, as before. Saved workflows keep the setting they were saved with. **Links** now has Connectivity’s columns, `preId`, `preType`, `postId`, `postType` and `weight`, instead of `source` and `target`, with real neuron IDs in the ID columns. A card reading `source` or `target` from Links needs those pickers set again.',
+      },
+      {
+        kind: 'node',
+        date: '2026-10-08',
+        title: '**Reduce Matrix** writes a `neuronId` column.',
+        body: 'Where the matrix’s rows are neurons (Adjacency per neuron, NBLAST, syNBLAST, Distance, Neurons to ZapBench Traces, or a Similarity Matrix over `neuronId`), Reduce Matrix now writes each one’s ID as `neuronId`, so **Attach Attributes** joins the table onto skeletons without setting **Match table on**. Before, matching on `label` found nothing on neuPrint, where a neuron’s label reads like `T4a 12345`. Other rows, such as cell types or timesteps, have an empty `neuronId`; match those on `label` as before. Attach Attributes now warns when it attaches nothing.',
+      },
+    ],
+  },
+  {
     date: '2026-10-07',
     title: 'A neuron, drawn flat',
     summary:

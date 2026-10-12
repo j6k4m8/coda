@@ -170,6 +170,7 @@ describe('a locked canvas', () => {
     store().setParam('src', 'url', 'https://example.org/b.csv')
     store().renameNode('view', 'Results')
     store().setHints('view', [{ text: 'Sort by weight first.' }])
+    store().setNodeCachePolicy('src', { maxAgeMs: 0 })
     store().toggleDisabled(['view'])
     store().toggleCollapsed(['view'])
     const view = graph().nodes.find((n) => n.id === 'view')
@@ -178,6 +179,7 @@ describe('a locked canvas', () => {
     )
     expect(view?.title).toBe('Results')
     expect(view?.hints).toEqual([{ text: 'Sort by weight first.' }])
+    expect(graph().nodes.find((n) => n.id === 'src')?.cache).toEqual({ maxAgeMs: 0 })
     expect(view?.disabled).toBe(true)
     expect(view?.collapsed).toBe(true)
   })
@@ -380,6 +382,8 @@ describe('every store action is on one side of the lock', () => {
     // Which hint is being written, and the write itself: text on a card, like a title.
     'editHint',
     'setHints',
+    // How long a node may answer from its downloads — freshness, not the canvas.
+    'setNodeCachePolicy',
     // The dock is the same kind of thing as the overlay — looking at a result, not editing the
     // graph — and its width is a panel preference.
     'pinNode',

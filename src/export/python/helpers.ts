@@ -1784,3 +1784,47 @@ registerHelper({
     '    return out',
   ],
 })
+
+/**
+ * Simplify Skeletons' twig pruning, as `skeletons.py`'s `_prune` runs it.
+ *
+ * A helper rather than a bare `fastcore.prune_twigs` call because Coda adds two protections the
+ * function does not have, and a notebook without them answers differently on exactly the neurons
+ * somebody would check: the soma is never removed, and a fragment with no branch point is never
+ * pruned (fastcore would delete it whole, being all twig). **fastcore's `mask` is True where a
+ * node may be pruned**, the opposite of how its docstring reads, which is why it is spelled out
+ * here rather than left to a reader.
+ *
+ * Everything stays in the neuron's own row numbers — `ids` is the surviving rows, `parents` their
+ * parents as rows — so the cell can hand both straight to a thinning call and index `nodes` with
+ * the result.
+ */
+registerHelper({
+  name: 'coda_prune_twigs',
+  requires: [['numpy'], ['fastcore']],
+  source: [
+    'def coda_prune_twigs(parents, coords, threshold, soma=-1, repeat=False):',
+    '    """Rows surviving Coda\'s twig pruning, and their parents as rows."""',
+    '    n = len(parents)',
+    '    has_parent = parents >= 0',
+    '    lengths = np.zeros(n, dtype=np.float32)',
+    '    lengths[has_parent] = np.linalg.norm(coords[has_parent] - coords[parents[has_parent]], axis=1)',
+    '    ids = np.arange(n)',
+    '    while True:',
+    "        # The fragments with a branch point. A component is labelled by its root's row.",
+    '        component = fastcore.connected_components(ids, parents)',
+    '        branched = np.zeros(n, dtype=bool)',
+    '        branched[component[np.bincount(parents[parents >= 0], minlength=n)[ids] >= 2]] = True',
+    '        # mask=True means "may be pruned": not the soma, not an unbranched fragment.',
+    '        prunable = branched[component] & (ids != soma)',
+    '        kept = fastcore.prune_twigs(ids, parents, threshold, weights=lengths[ids], mask=prunable)',
+    '        if len(kept) == len(ids):',
+    '            return ids, parents',
+    '        survives = np.zeros(n, dtype=bool)',
+    '        survives[kept] = True',
+    '        survives = survives[ids]',
+    '        ids, parents = ids[survives], parents[survives]',
+    '        if not repeat:',
+    '            return ids, parents',
+  ],
+})

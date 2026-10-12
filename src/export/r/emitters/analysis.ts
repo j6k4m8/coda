@@ -1271,7 +1271,7 @@ registerEmitter('neuron.xform', (ctx) => {
 // ---------------------------------------------------------------------------
 
 /**
- * Three TODOs, and the reasons are three different shapes of gap.
+ * Four TODOs, and the reasons are different shapes of gap.
  *
  * The natverse is a *port target* rather than a translation for these. `nat.nblast` scores
  * dotprops and has no synapse-based variant at all; `nat` has resampling and stitching but its
@@ -1306,6 +1306,15 @@ registerEmitter('neuron.cleanSkeletons', (ctx) =>
       'micrometres along the neurite, so a translated cell would return different neurons. ' +
       'Export as a notebook for the exact pipeline; it calls ' +
       'navis-fastcore, which is what Coda ran.',
+  ),
+)
+
+registerEmitter('neuron.simplifySkeletons', (ctx) =>
+  ctx.todo(
+    'nat has prune_twigs(), but Coda adds two protections to it: the soma is never removed, ' +
+      'and a fragment with no branch point is never pruned. R also has no Ramer-Douglas-Peucker ' +
+      'or Visvalingam-Whyatt thinning for skeletons. Export as a notebook for the exact steps; ' +
+      'it calls navis-fastcore, which is what Coda ran.',
   ),
 )
 

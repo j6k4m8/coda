@@ -2089,8 +2089,13 @@ adjacency_matrix_df <- neuprint_get_adjacency_matrix(
 )
 
 adjacency_links <- as.data.frame(as.table(as.matrix(adjacency_matrix_df)), stringsAsFactors = FALSE)
-names(adjacency_links) <- c("source", "target", "weight")
+names(adjacency_links) <- c("preId", "postId", "weight")
 adjacency_links <- adjacency_links[adjacency_links$weight != 0, ]
+.meta <- neuprint_get_meta(unique(c(adjacency_links$preId, adjacency_links$postId)), conn = hemibrain_neuprint)
+adjacency_links$preType <- .meta$type[match(adjacency_links$preId, as.character(.meta$bodyid))]
+adjacency_links$postType <- .meta$type[match(adjacency_links$postId, as.character(.meta$bodyid))]
+adjacency_links <- adjacency_links[c("preId", "preType", "postId", "postType", "weight")]
+adjacency_links <- coda_ids(adjacency_links, "preId", "postId")
 # NOTE: Coda groups this matrix by cell type (`Group by type`).
 # neuprint_get_adjacency_matrix returns one row and column per body, so
 # group the result yourself to match.
@@ -2291,6 +2296,33 @@ transform_neurons_2 <- xform(skeletons, reg = landmark_transform)
 # node takes a Gaussian width in micrometres along the neurite, so a
 # translated cell would return different neurons. Export as a notebook for
 # the exact pipeline; it calls navis-fastcore, which is what Coda ran.
+```
+
+```{r simplify-skeletons}
+# ── Simplify Skeletons ──
+# TODO: nat has prune_twigs(), but Coda adds two protections to it: the soma
+# is never removed, and a fragment with no branch point is never pruned. R
+# also has no Ramer-Douglas-Peucker or Visvalingam-Whyatt thinning for
+# skeletons. Export as a notebook for the exact steps; it calls
+# navis-fastcore, which is what Coda ran.
+```
+
+```{r simplify-skeletons-2}
+# ── Simplify Skeletons ──
+# TODO: nat has prune_twigs(), but Coda adds two protections to it: the soma
+# is never removed, and a fragment with no branch point is never pruned. R
+# also has no Ramer-Douglas-Peucker or Visvalingam-Whyatt thinning for
+# skeletons. Export as a notebook for the exact steps; it calls
+# navis-fastcore, which is what Coda ran.
+```
+
+```{r simplify-skeletons-3}
+# ── Simplify Skeletons ──
+# TODO: nat has prune_twigs(), but Coda adds two protections to it: the soma
+# is never removed, and a fragment with no branch point is never pruned. R
+# also has no Ramer-Douglas-Peucker or Visvalingam-Whyatt thinning for
+# skeletons. Export as a notebook for the exact steps; it calls
+# navis-fastcore, which is what Coda ran.
 ```
 
 ```{r nblast-k-nn}
@@ -2794,6 +2826,7 @@ m_[!is.finite(m_)] <- NA
 # necessarily a self-comparison, and Coda skips the diagonal only in that case.
 if (identical(rownames(m_), colnames(m_))) diag(m_) <- NA
 reduce_matrix <- data.frame(`label` = rownames(m_))
+reduce_matrix[["neuronId"]] <- ifelse(grepl("^-?[0-9]+$", reduce_matrix[["label"]]), reduce_matrix[["label"]], NA_character_)
 reduce_matrix[["sim_mean"]] <- rowMeans(m_, na.rm = TRUE)
 reduce_matrix[["sim_median"]] <- apply(m_, 1, median, na.rm = TRUE)
 reduce_matrix[["sim_sd"]] <- apply(m_, 1, sd, na.rm = TRUE)
@@ -3356,6 +3389,7 @@ heatmap_6_out |>
 m_ <- t(as.matrix(pivot_matrix_df))
 m_[!is.finite(m_)] <- NA
 reduce_matrix_2 <- data.frame(`label` = rownames(m_))
+reduce_matrix_2[["neuronId"]] <- NA_character_
 reduce_matrix_2[["mean"]] <- rowMeans(m_, na.rm = TRUE)
 reduce_matrix_2[["max"]] <- apply(m_, 1, coda_max)
 ```

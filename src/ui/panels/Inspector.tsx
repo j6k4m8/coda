@@ -17,6 +17,7 @@ import type { Socket } from '../../core/sockets'
 import type { CodaType } from '../../core/types'
 import { socketLabel } from '../../core/sockets'
 import { describeValue } from '../../core/values'
+import { CACHE_LIFETIMES, cachePreset } from '../../core/cachePolicy'
 import { hasHelp } from '../../help/registry'
 import { useGraphStore, useSelectedNode } from '../../store/graphStore'
 import { exportBaseName } from '../export'
@@ -38,6 +39,7 @@ export function Inspector() {
   const runNode = useGraphStore((s) => s.runNode)
   const invalidateNode = useGraphStore((s) => s.invalidateNode)
   const clearNodeCache = useGraphStore((s) => s.clearNodeCache)
+  const setNodeCachePolicy = useGraphStore((s) => s.setNodeCachePolicy)
   const expandNode = useGraphStore((s) => s.expandNode)
   const nodeInputs = useGraphStore((s) => s.nodeInputs)
   const setNotice = useGraphStore((s) => s.setNotice)
@@ -55,6 +57,8 @@ export function Inspector() {
   const runWarning = useGraphStore((s) => (node ? s.nodeWarning(node.id) : undefined))
 
   const def = node ? getNodeDef(node.type) : undefined
+  // The ticked lifetime, or -1 for one written by hand — read twice by the select below.
+  const preset = cachePreset(node?.cache)
   const types = node ? inference.nodes[node.id] : undefined
   const ctx = useMemo(
     () => (def && node ? makeInferContext(def, node.params, types?.inputs ?? {}) : undefined),
@@ -286,6 +290,32 @@ export function Inspector() {
                 </button>
               )}
             </div>
+            {/* The card label's right-click, here as well — see `CacheLifetimeMenu`. */}
+            {def?.dataCache && (
+              <label className="inspector__cache-lifetime">
+                Cache lifetime
+                <select
+                  className="field"
+                  value={String(preset)}
+                  onChange={(event) => {
+                    const picked = CACHE_LIFETIMES[Number(event.target.value)]
+                    if (picked) setNodeCachePolicy(node.id, picked.policy)
+                  }}
+                >
+                  {CACHE_LIFETIMES.map((p, i) => (
+                    <option key={p.label} value={String(i)}>
+                      {p.label}
+                    </option>
+                  ))}
+                  {/* A hand-written lifetime off the list, shown rather than misread as one. */}
+                  {preset < 0 && (
+                    <option value="-1" disabled>
+                      Custom
+                    </option>
+                  )}
+                </select>
+              </label>
+            )}
           </div>
         )}
       </div>

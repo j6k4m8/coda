@@ -3,8 +3,8 @@
  *
  * Lifted out of `src/umap/run.ts`, which is where both halves were measured and where the
  * comments below come from. It moved the moment a second caller needed it: `Points in Volumes`
- * casts a ray per point, which at its own warning threshold is thirteen seconds of pure
- * arithmetic.
+ * casts a ray per point, which at its own warning threshold (`RAY_WARN`) is the better part of a
+ * minute of pure arithmetic.
  *
  * **`sliced` is the part worth sharing, and the first version of this module did not share it.**
  * It lifted the constant and the two-line primitive and left every caller to write the loop —

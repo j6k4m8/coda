@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { column, tableSchema } from '../../core/types'
 import { makeTable } from '../../core/values'
 import type { DataSource } from '../source'
-import { capabilityAnywhere } from '../source'
+import { PARTNER_POSITION_COLUMNS, capabilityAnywhere, synapsesBetweenSchema } from '../source'
 import { resetCache } from '../cache'
 import { resetIndexLoads } from '../neuronIndex'
 import { DRACO_INFO } from '../../test/precomputedStubs'
@@ -1314,6 +1314,25 @@ describe('synapses between', () => {
       expect(points.attributes.data.confidence).toEqual([80])
       expect(points.units).toBe('nm')
     }
+  })
+
+  it('asks for both position columns under both, the presynaptic one drawn', async () => {
+    const captured = installFetch({ [QUERY]: ROWS })
+    const points = await new CaveSource().fetchSynapsesBetween({
+      datasetId: DATASET,
+      sourceIds: [SOURCE],
+      targetIds: [TARGET],
+      location: 'both',
+    })
+    const body = rowQueries(captured, QUERY)[0]!.body as { select_columns?: unknown }
+    expect(JSON.stringify(body.select_columns)).toContain('pre_pt_position')
+    expect(JSON.stringify(body.select_columns)).toContain('post_pt_position')
+    expect([...points.positions]).toEqual([10, 20, 30])
+    expect(points.attributes.schema).toEqual(synapsesBetweenSchema('both'))
+    expect(points.attributes.data.polarity).toEqual(['pre'])
+    expect(PARTNER_POSITION_COLUMNS.map((c) => points.attributes.data[c]![0])).toEqual([
+      40, 50, 60,
+    ])
   })
 
   it('cuts confidence on the server, where it saves the download', async () => {

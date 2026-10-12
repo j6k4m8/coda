@@ -18,6 +18,8 @@ import { LOCKED_HINT } from '../lockCopy'
 import { shortcutKeys } from '../shortcuts'
 import { AlignTools } from './AlignTools'
 import { ContextMenu, ContextMenuSection } from '../menu/ContextMenu'
+import { CacheLifetimeRows } from '../nodes/CacheLifetimeMenu'
+import { cacheLifetimeLabel } from '../../core/cachePolicy'
 
 export interface NodeContextMenuProps {
   screenPosition: { x: number; y: number }
@@ -138,6 +140,19 @@ export function NodeContextMenu({
             >
               Clear Cache
             </button>
+          )}
+          {/* The card label's right-click, for a pointer that has none — see `CacheLifetimeMenu`. */}
+          {def?.dataCache && (
+            <ContextMenuSection
+              label={
+                <span>
+                  Cache Lifetime <kbd>{cacheLifetimeLabel(node.cache)}</kbd>
+                </span>
+              }
+              title="How long this node may answer from the data it downloaded"
+            >
+              <CacheLifetimeRows nodeId={nodeId} policy={node.cache} onPicked={onClose} />
+            </ContextMenuSection>
           )}
           <div className="context-menu__sep" />
           <button

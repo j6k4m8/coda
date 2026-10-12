@@ -142,6 +142,9 @@ function linkageToCsv(linkage: LinkageValue): string {
  * publishes no soma/axon/dendrite labelling with its skeletons, and inventing one — marking the
  * root as soma, say — would be a claim about the neuron's anatomy that nothing in the data
  * supports.
+ *
+ * Node tags (`SkeletonGeometry.tags`) are not written: SWC has no column for them, and comment
+ * lines carrying them would be a dialect no reader shares.
  */
 export function skeletonToSwc(skeleton: SkeletonGeometry): string {
   const count = skeleton.radii.length

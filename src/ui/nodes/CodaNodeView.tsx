@@ -43,6 +43,7 @@ import { drawsFromInputs, ValuePreview } from '../viewers/ValuePreview'
 import { CardCanvasScale } from '../viewers/canvasScale'
 import { ExportNodeContext } from '../viewers/exportRegistry'
 import { CacheAge } from './CacheAge'
+import { CacheLifetimeMenu } from './CacheLifetimeMenu'
 import { DatasetCacheAge } from './DatasetCacheAge'
 import { nodeBody } from './nodeBodies'
 import { nodeIssues } from './nodeIssues'
@@ -166,6 +167,13 @@ function CodaNodeViewImpl({
    */
   const runWarning = useGraphStore((s) => s.nodeWarning(id))
   const clearNodeCache = useGraphStore((s) => s.clearNodeCache)
+  // Where the cache-lifetime menu was opened, while it is open — see `CacheLifetimeMenu`.
+  const [cacheMenuAt, setCacheMenuAt] = useState<{ x: number; y: number } | undefined>()
+  // The label's click and the menu's "Fetch Again Now": drop the node's data cache and run it.
+  const refreshData = () => {
+    clearNodeCache(id)
+    void runNode(id)
+  }
   // Only the multi-input viewers need these, so they are resolved lazily per render rather
   // than subscribed to — `previewVersion` above is what re-renders the card when they move.
   const nodeInputs = useGraphStore((s) => s.nodeInputs)
@@ -885,11 +893,19 @@ function CodaNodeViewImpl({
              */}
             <CacheAge
               fetchedAt={fetchedAt}
-              onRefresh={() => {
-                clearNodeCache(id)
-                void runNode(id)
-              }}
+              onRefresh={refreshData}
+              policy={node.cache}
+              onMenu={def.dataCache ? setCacheMenuAt : undefined}
             />
+            {cacheMenuAt && (
+              <CacheLifetimeMenu
+                at={cacheMenuAt}
+                nodeId={id}
+                policy={node.cache}
+                onRefresh={refreshData}
+                onClose={() => setCacheMenuAt(undefined)}
+              />
+            )}
             {/* A body's own foot control — Link Table's re-read — beside the age it belongs with. */}
             {body?.Footer && (
               <body.Footer

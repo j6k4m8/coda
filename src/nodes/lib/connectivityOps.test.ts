@@ -14,14 +14,16 @@
 import { describe, expect, it } from 'vitest'
 
 import { column, tableSchema } from '../../core/types'
-import type { TableValue } from '../../core/values'
-import { tableFromRows } from '../../core/values'
+import type { MatrixLine, TableValue } from '../../core/values'
+import { makeMatrix, tableFromRows } from '../../core/values'
 import type { ConnectionDirection } from '../../data/source'
 import { connectivitySchemaWithRoi } from '../../data/source'
 import {
   connectivityOutputSchema,
   endpointNeurons,
   endpointSchema,
+  MATRIX_LINKS_SCHEMA,
+  matrixToLinks,
   neuronRowsFor,
   normalizeConnectivity,
   normalizeTargets,
@@ -792,5 +794,66 @@ describe('neuron rows for the endpoint list', () => {
     )
     const out = neuronRowsFor(derived, wider, NEURON_SCHEMA)
     expect(out.schema.columns.map((c) => c.name)).toEqual(['neuronId', 'type', 'status'])
+  })
+})
+
+describe('matrixToLinks: Adjacency as Connectivity’s edge list', () => {
+  /** An adjacency whose lines are the given ones, with labels that say nothing useful. */
+  const adjacency = (rows: MatrixLine[], cols: MatrixLine[], values: number[]) => ({
+    ...makeMatrix(
+      rows.map((_, i) => `row ${i}`),
+      cols.map((_, i) => `col ${i}`),
+      Float64Array.from(values),
+    ),
+    lines: { rows, cols },
+  })
+  const type = (name: string): MatrixLine => ({ id: null, type: name })
+  const neuron = (id: string, name: string | null = null): MatrixLine => ({ id, type: name })
+
+  it('reads each line’s identity off the matrix, never off its label', () => {
+    // A neuron with its type, a neuron the source could not type, and a type-grouped column.
+    const links = matrixToLinks(
+      adjacency([neuron('19102', 'KCg-d'), neuron('10013')], [type('MBON01')], [4, 2]),
+    )
+    expect(links.schema).toEqual(MATRIX_LINKS_SCHEMA)
+    expect(links.data.preId).toEqual(['19102', '10013'])
+    expect(links.data.preType).toEqual(['KCg-d', null])
+    expect(links.data.postId).toEqual([null, null])
+    expect(links.data.postType).toEqual(['MBON01', 'MBON01'])
+    expect(links.data.weight).toEqual([4, 2])
+  })
+
+  it('drops the zeros a reshape manufactured, row-major, rather than emitting a complete graph', () => {
+    /*
+     * The one judgement here, and the one that looks like a contradiction: `core.unpivot` keeps
+     * zeros on the grounds that 0 may have been measured. Here the zero was *manufactured* — a
+     * matrix cell has to hold something — so dropping it going back restores the form the data
+     * had. Kept, a 500 × 500 adjacency is 250,000 rows, nearly all zero, and Build Network makes
+     * a complete graph of zero-weight links out of it.
+     */
+    const links = matrixToLinks(
+      adjacency([type('a'), type('b')], [type('x'), type('y')], [3, 0, 0, 5]),
+    )
+    expect(links.data.preType).toEqual(['a', 'b'])
+    expect(links.data.postType).toEqual(['x', 'y'])
+    expect(links.data.weight).toEqual([3, 5])
+  })
+
+  it('fills a neuron line its source left untyped from typeOf, and nothing else', () => {
+    // A per-neuron CAVE or edge-set matrix: ids without types, which the node fills from the
+    // tables wired in. A typed line and a type-grouped one are left as the source wrote them.
+    const typeOf = (id: string) => ({ '10013': 'MBON20', '19102': 'wrong' })[id]
+    const links = matrixToLinks(
+      adjacency([neuron('19102', 'KCg-d'), neuron('10013')], [type('MBON01')], [4, 2]),
+      typeOf,
+    )
+    expect(links.data.preType).toEqual(['KCg-d', 'MBON20'])
+    expect(links.data.postType).toEqual(['MBON01', 'MBON01'])
+  })
+
+  it('has nothing to say about an all-zero matrix, and says it with the right columns', () => {
+    const empty = matrixToLinks(adjacency([type('a')], [type('x')], [0]))
+    expect(empty.length).toBe(0)
+    expect(empty.schema).toEqual(MATRIX_LINKS_SCHEMA)
   })
 })

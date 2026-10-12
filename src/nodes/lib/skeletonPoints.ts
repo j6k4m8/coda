@@ -311,7 +311,9 @@ export async function skeletonPointsValue(
           piece,
           hasRadii ? radii[a]! + (radii[b]! - radii[a]!) * t : null,
           strahler[b]!,
-          fromRoot[a]! + (target - before),
+          // Interpolated like the radius, not `fromRoot[a] + (target - before)`: between a soma in
+          // mid-fragment and the delivered root, depth falls towards the children.
+          fromRoot[a]! + (fromRoot[b]! - fromRoot[a]!) * t,
         )
       }
     }

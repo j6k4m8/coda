@@ -10,6 +10,7 @@
 import type { FilterOp } from './rowPredicate'
 import type { CodaType, DType, PopulationFilter, TableSchema } from './types'
 import { datasetRef } from './types'
+import { isNeuronId } from './ids'
 
 export type CellValue = number | string | boolean | null
 export type ColumnData = CellValue[]
@@ -46,6 +47,41 @@ export interface MatrixValue {
   /** What the cells mean, for viewer axis/legend labels. */
   readonly valueLabel?: string
   readonly measure?: MatrixMeasure
+  /**
+   * What each row and column stands for, where the builder knows — **the one list of who
+   * records them**: Adjacency, NBLAST, syNBLAST, Distance, a Similarity over `neuronId`, and
+   * Neurons to ZapBench Traces (rows; its timesteps are lines that are neither). A line that is
+   * neither a neuron nor a type has id and type null. The labels are for display (`KCg-d 19102`
+   * on neuPrint, a `Label by` type) and are never parsed back; Links and Reduce Matrix's
+   * `neuronId` read these. Normalize keeps them; anything that reorders or relabels a matrix
+   * rebuilds it and drops them, rather than carrying lines that no longer match their labels.
+   */
+  readonly lines?: {
+    readonly rows: readonly MatrixLine[]
+    readonly cols: readonly MatrixLine[]
+  }
+}
+
+/** One matrix line: a neuron (its id, and its type where known), or a whole type (no id). */
+export interface MatrixLine {
+  readonly id: string | null
+  readonly type: string | null
+}
+
+/**
+ * The lines of an axis of neurons, by id. An id that is not a neuron id — an uploaded mesh's name —
+ * names no neuron, so its line has none rather than a claim `neuronId` would carry downstream.
+ */
+export function neuronLines(ids: readonly (string | null)[]): MatrixLine[] {
+  return ids.map((id) => ({ id: id !== null && isNeuronId(id) ? id : null, type: null }))
+}
+
+/** The matrix with what its lines are recorded beside its labels. */
+export function withLines(
+  matrix: MatrixValue,
+  lines: NonNullable<MatrixValue['lines']>,
+): MatrixValue {
+  return { ...matrix, lines }
 }
 
 export interface DatasetValue {
@@ -258,8 +294,9 @@ export interface SkeletonGeometry {
    * dendrite, 0 for a point the source left unlabelled. The vocabulary every source that labels
    * compartments already speaks: CAVE's skeleton service and every SWC file.
    *
-   * **Absent means the source publishes no labels**, which is most of them — neuPrint, CATMAID and
-   * level-2 skeletons carry none. Never inferred here: a split computed from synapses is a
+   * **Absent means the source publishes no labels**, which is most of them — level-2 skeletons
+   * carry none, and neuPrint and CATMAID label only the soma, from `somaLocation` and from the
+   * `soma` node tag respectively. Never inferred here: a split computed from synapses is a
    * *result* (`out.topology`), and one written into the geometry would be indistinguishable from
    * one the source measured. Where present it is exactly as long as `radii`.
    */
@@ -276,7 +313,8 @@ export interface SkeletonGeometry {
    *
    * **Absent means nobody split this skeleton.** No source sets it. It is a property of *this*
    * tree's nodes, so anything that renumbers them (Clean Skeletons) drops it; anything that only
-   * moves them (mirror, warp, heal) keeps it. Where present it is exactly as long as `radii`.
+   * moves them (mirror, warp, heal) keeps it, and one that keeps a subset of them in place
+   * (Simplify Skeletons) gathers it. Where present it is exactly as long as `radii`.
    */
   readonly split?: Uint8Array
   /**
@@ -286,9 +324,23 @@ export interface SkeletonGeometry {
    * One map rather than a field per measure, so the next per-node number (Strahler order, distance
    * from the soma) needs no new field, no new viewer mode and no new entry in `skeletonBuffers`.
    * Like `split` these are results computed for *this* tree's nodes: never set by a source, kept by
-   * a transform that only moves the nodes, dropped by one that renumbers them.
+   * a transform that only moves the nodes, dropped by one that renumbers them, gathered by one that
+   * keeps a subset in place.
    */
   readonly nodeValues?: Readonly<Record<string, Float32Array>>
+  /**
+   * Node tags, by name: the nodes each one is on — CATMAID's free-text tags (`soma`, `axon`,
+   * `ends`, …), which a tracer places by hand.
+   *
+   * **Absent means the source publishes none**, which is every source but CATMAID. Unlike `split`
+   * these are the source's, and what a tag marks is a point on the cable, so a transform that only
+   * moves nodes keeps them as they are and one that renumbers them (Clean Skeletons,
+   * `cleanOps.snappedTags`; Simplify Skeletons, for the nodes it removes) re-snaps each to the
+   * nearest new node rather than dropping them — the rule hand corrections follow. A new
+   * renumbering transform must do the same: spreading the item would carry indices that now name
+   * other nodes, with nothing to say so.
+   */
+  readonly tags?: Readonly<Record<string, Int32Array>>
 }
 
 /**
@@ -323,6 +375,11 @@ export const NODE_VALUES = [
     label: 'synapse flow (fraction of peak)',
     /** Where the value comes from — so a picker can say it without naming nodes itself. */
     source: 'Split Axon/Dendrite, with Write synapse flow on',
+  },
+  {
+    value: 'axonProbability',
+    label: 'compartment probability (label propagation)',
+    source: 'Split Axon/Dendrite by label propagation, with Write probability on',
   },
 ] as const satisfies readonly { value: string; label: string; source: string }[]
 
@@ -403,6 +460,7 @@ export function skeletonBuffers(s: Omit<SkeletonGeometry, 'id'>): ArrayBufferVie
   if (s.compartments) buffers.push(s.compartments)
   if (s.split) buffers.push(s.split)
   if (s.nodeValues) buffers.push(...Object.values(s.nodeValues))
+  if (s.tags) buffers.push(...Object.values(s.tags))
   return buffers
 }
 
@@ -790,6 +848,16 @@ export function emptyTable(
   return makeTable(schema, data, kind)
 }
 
+/** A cloud of no points with `schema`'s columns — what a points port says when there is nothing. */
+export function emptyPoints(schema: TableSchema): PointsValue {
+  return {
+    kind: 'points',
+    positions: new Float32Array(0),
+    attributes: emptyTable(schema),
+    bounds: EMPTY_BOUNDS,
+  }
+}
+
 export function makeMatrix(
   rowLabels: string[],
   colLabels: string[],
@@ -809,6 +877,15 @@ export function makeMatrix(
     ...(valueLabel ? { valueLabel } : {}),
     ...(measure ? { measure } : {}),
   }
+}
+
+/**
+ * An adjacency answer: a matrix whose every line says what it stands for. What
+ * `DataSource.fetchAdjacency` returns, so a source cannot hand over display labels alone — Links
+ * reads the lines and never a label (`matrixToLinks`).
+ */
+export type AdjacencyMatrix = MatrixValue & {
+  readonly lines: NonNullable<MatrixValue['lines']>
 }
 
 export function num(value: number): ScalarValue {
@@ -839,7 +916,7 @@ export function getRow(table: TableValue, index: number): Record<string, CellVal
 }
 
 /** Materialise selected row indices into a new table, preserving schema. */
-export function selectRows(table: TableValue, indices: number[]): TableValue {
+export function selectRows(table: TableValue, indices: readonly number[]): TableValue {
   const data: Record<string, ColumnData> = {}
   for (const col of table.schema.columns) {
     const src = table.data[col.name]!

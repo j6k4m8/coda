@@ -1,9 +1,9 @@
 /**
  * Whether a point is inside a mesh, asked a hundred thousand times.
  *
- * `Points in Volumes` is the only caller, and everything here is about making its inner loop
- * affordable rather than about what the answer means — that argument lives in
- * `pointsInMeshes.ts`, which owns the schema, the column and the partition.
+ * `Points in Volumes` is the first caller and a split by ROI the second, and everything here is
+ * about making their inner loop affordable rather than about what the answer means — that
+ * argument lives in `pointsInMeshes.ts`, which owns the schema, the column and the partition.
  *
  * ## The tree is `meshTrees.ts`', not this file's
  *
@@ -31,6 +31,7 @@
 import type { Slicer } from '../../core/slice'
 import type { Boxes, MeshGeometry } from '../../core/values'
 import { boxesOf, signedVolume } from '../../core/values'
+import { meshIndexes } from './geometryIndex'
 import { buildMeshTrees } from './meshTrees'
 
 /**
@@ -41,16 +42,19 @@ import { buildMeshTrees } from './meshTrees'
  * thousand points is the difference between a hundred thousand short-lived arrays and none.
  * `raycastFirst` itself still mints an intersection object per **hit** — misses return `null` —
  * so the allocation left is bounded by the points that are inside something rather than by the
- * rays, which is negligible beside 0.7 µs a ray but is not nothing.
+ * rays, which is negligible beside ~1.8 µs a ray but is not nothing.
  */
 export interface InsideTests {
   /**
-   * Every mesh whose surface encloses `(x, y, z)`, appended to `out` **in item order**.
+   * Every mesh whose surface encloses `(x, y, z)` — or comes within the margin of it, where one
+   * was asked for — appended to `out` **in item order**.
    *
    * The caller clears `out`. In item order because that order is what decides which region
    * names an overlapping point, and the decision has to be the same one every run.
    */
   containing(x: number, y: number, z: number, out: number[]): void
+  /** Whether `containing` would append anything — every ray before any margin search. */
+  containsAny(x: number, y: number, z: number): boolean
 }
 
 /**
@@ -68,7 +72,7 @@ export interface VolumeBoxes {
    *
    * A box test is three comparisons where a ray is a tree descent, so the sweep is cheap enough
    * to spend on knowing: 200,000 points against 63 volumes is 12.6 M tests in ~44 ms, against
-   * the fourteen seconds the warning exists to announce.
+   * the tens of seconds `RAY_WARN` exists to announce.
    */
   candidateCount(x: number, y: number, z: number): number
 }
@@ -82,26 +86,61 @@ export interface VolumeBoxes {
  */
 const PROBE = [0.113, 0.271, 0.956] as const
 
+/** Boxes, and the count over them. */
+type CountedBoxes = VolumeBoxes & { boxes: Boxes }
+
 /** The prefilter, with no library behind it. Hand the same boxes to `buildInsideTests`. */
-export function volumeBoxes(items: readonly MeshGeometry[]): VolumeBoxes & { boxes: Boxes } {
-  const boxes = boxesOf(items)
+export function volumeBoxes(items: readonly MeshGeometry[]): CountedBoxes {
+  return counting(boxesOf(items))
+}
+
+/**
+ * The prefilter's boxes grown by `margin` on each side: the points that may cost a surface search
+ * under `buildInsideTests`' margin. Grown from the boxes already built, `boxesOf` being a pass over
+ * every vertex. Not a prefilter to hand on — a ray cast from the grown shell is wasted, a point
+ * outside a box being outside its mesh.
+ */
+export function grownBoxes(built: Boxes, margin: number): CountedBoxes {
+  const boxes = Float64Array.from(built)
+  for (let i = 0; i < boxes.length; i++) boxes[i]! += i % 6 < 3 ? -margin : margin
+  return counting(boxes)
+}
+
+function counting(boxes: Boxes): CountedBoxes {
+  const count = boxes.length / 6
   return {
     boxes,
     candidateCount(x, y, z) {
       let n = 0
-      for (let i = 0; i < items.length; i++) if (inBox(boxes, i, x, y, z)) n++
+      for (let i = 0; i < count; i++) if (inBox(boxes, i, x, y, z)) n++
       return n
     },
   }
 }
 
-/** The containment tests, over trees `meshTrees.ts` builds and caches. */
+/**
+ * The containment tests, over trees `meshTrees.ts` builds and caches.
+ *
+ * With a `margin`, a point outside a mesh but within that distance of its surface counts as
+ * enclosed too (a split by ROI's `Margin`). That is Distance between's `hasWithin`
+ * (`geometryIndex.ts`) on the same cached trees, asked only inside the box grown by the margin —
+ * a tree rejects a far point at its root, but that is a few hundred nanoseconds where the box is
+ * a few, per point per mesh.
+ */
 export async function buildInsideTests(
   items: readonly MeshGeometry[],
   prefilter: { boxes: Boxes } = volumeBoxes(items),
   hooks: Slicer = {},
+  margin = 0,
 ): Promise<InsideTests> {
   const { three, trees: built } = await buildMeshTrees(items, hooks)
+  const near =
+    margin > 0
+      ? {
+          indexes: await meshIndexes(items, hooks),
+          boxes: grownBoxes(prefilter.boxes, margin).boxes,
+        }
+      : undefined
   const { DoubleSide, Ray, Vector3 } = three
 
   const { boxes } = prefilter
@@ -126,12 +165,25 @@ export async function buildInsideTests(
     return outward[index] ? leaving : !leaving
   }
 
+  // Each box before its tree. A search costs about eleven rays, so it comes after the ray.
+  const inside = (i: number, x: number, y: number, z: number): boolean =>
+    inBox(boxes, i, x, y, z) && encloses(i, x, y, z)
+  const nearby = (i: number, x: number, y: number, z: number): boolean =>
+    near !== undefined &&
+    inBox(near.boxes, i, x, y, z) &&
+    near.indexes[i]!.hasWithin(x, y, z, margin)
+
   return {
     containing(x, y, z, out) {
       for (let i = 0; i < items.length; i++) {
-        if (!inBox(boxes, i, x, y, z)) continue
-        if (encloses(i, x, y, z)) out.push(i)
+        if (inside(i, x, y, z) || nearby(i, x, y, z)) out.push(i)
       }
+    },
+    // Every ray before any search: regions nest, so a point near one is often inside the next.
+    containsAny(x, y, z) {
+      for (let i = 0; i < items.length; i++) if (inside(i, x, y, z)) return true
+      if (near) for (let i = 0; i < items.length; i++) if (nearby(i, x, y, z)) return true
+      return false
     },
   }
 }

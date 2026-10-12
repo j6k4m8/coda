@@ -41,13 +41,11 @@
  *
  * ## What is deliberately absent
  *
- * **A soma.** `SkeletonGeometry` is positions, radii and parents; there is no soma on it and no
- * node labels either — `data/swc.ts` says outright that the SWC label column "is read and
- * discarded" — and neuPrint's `somaLocation` is a Neo4j point that `neuprint/schema.ts`
- * suppresses. A soma-to-soma distance is a real question and the honest answer today is that
- * Coda cannot ask it; the root of a skeleton is *usually* the soma and is not on a chunk
- * decomposition or on a fragment, and an anchor that silently means two things is worse than
- * one that is missing. `Centroid` is here because it is not a soma standing in for one.
+ * **A soma.** A skeleton labels one only where its source does — SWC structure codes, or
+ * neuPrint's `somaLocation` snapped onto a node (`withSomaAt`) — and many sources label none, on
+ * meshes and point clouds there is nothing to label at all. The root is *usually* the soma and is
+ * not on a chunk decomposition or on a fragment, and an anchor that silently means two things is
+ * worse than one that is missing. `Centroid` is here because it is not a soma standing in for one.
  *
  * **Resampling.** `Clean Skeletons` is one card up and does it properly. With the weighting
  * above it is also no longer needed for a mean to mean something, which is the whole argument
@@ -1028,7 +1026,7 @@ export function mixedQuantityRefusal(shape: DistanceShape): string | undefined {
  * a graphene body can carry ten times that — so this stays an under-estimate for a
  * full-resolution scene, which the node's own 5-minute threshold is far enough out to absorb.
  */
-const SEARCHES_PER_SECOND: Record<
+export const SEARCHES_PER_SECOND: Record<
   DistanceCollection['kind'],
   { exhaustive: number; bounded: number }
 > = {

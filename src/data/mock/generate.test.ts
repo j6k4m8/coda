@@ -164,12 +164,9 @@ describe('MockSource', () => {
       targetIds: dn.data.neuronId!.map(String),
       groupByType: true,
     })
-    expect(m.rowLabels).toEqual(
-      ['LC4', 'LC6', 'LC9', 'LC11'].sort((a, b) =>
-        a.localeCompare(b, undefined, { numeric: true }),
-      ),
-    )
-    expect(m.colLabels).toEqual(['DNp02', 'DNp11'])
+    // First-seen order, as every source's fold draws it; the set is what is pinned.
+    expect(new Set(m.rowLabels)).toEqual(new Set(['LC4', 'LC6', 'LC9', 'LC11']))
+    expect(new Set(m.colLabels)).toEqual(new Set(['DNp02', 'DNp11']))
     const total = [...m.values].reduce((a, b) => a + b, 0)
     expect(total).toBeGreaterThan(0)
   })

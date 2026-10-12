@@ -33,7 +33,6 @@ import { isMeshesValue, isPointsValue } from '../../core/values'
 import { buildInsideTests, volumeBoxes } from '../lib/meshInside'
 import {
   DEFAULT_VOLUME_COLUMN,
-  RAY_WARN,
   VOLUME_COLUMN_PARAM,
   checkPointFrame,
   columnClash,
@@ -42,7 +41,7 @@ import {
   splitOnLabels,
   volumeColumnName,
   volumeColumnSchema,
-  warnRayCount,
+  warnRayWork,
 } from '../lib/pointsInMeshes'
 
 registerNode({
@@ -156,16 +155,15 @@ registerNode({
      * separate from `buildInsideTests` buys: the prefilter needs no library and no trees, so the
      * one stretch of this run with no abort check in it is entered only after the reader has been
      * told what the rays will cost.
-     *
-     * `points × volumes` is an exact upper bound on the ray count and costs one multiply, so a
-     * cloud that cannot possibly reach the threshold skips the counting sweep entirely — which is
-     * every ordinary one: a hundred thousand synapses against a primary set is 6.3 M, under
-     * `RAY_WARN`, and was paying a full box sweep of the cloud to discover that.
+     * `points × volumes` is the exact upper bound `warnRayWork` checks first.
      */
     const prefilter = volumeBoxes(volumes.items)
-    if (points.attributes.length * volumes.items.length > RAY_WARN) {
-      warnRayCount(ctx, countRays(points, prefilter.candidateCount), volumes.items.length)
-    }
+    warnRayWork(
+      ctx,
+      { rays: points.attributes.length * volumes.items.length },
+      () => ({ rays: countRays(points.positions, prefilter.candidateCount) }),
+      volumes.items.length,
+    )
 
     ctx.progress(0.02, `${volumes.items.length} volumes`)
     const tests = await buildInsideTests(volumes.items, prefilter, {

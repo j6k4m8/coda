@@ -12,11 +12,16 @@
  * 2. **Smooth.** A Gaussian along the neurite, which takes the tracing jitter out without
  *    moving a branch point. Before resampling rather than after, because the kernel is a
  *    *distance* and so gives the same answer at any node density.
- * 3. **Resample** *or* **downsample**, never both. One lays nodes down at a fixed spacing and
- *    the other keeps every Nth of the ones already there; running both means resampling to a
- *    spacing and then throwing three quarters of it away. They are one enum for that reason,
- *    which is a structural way of saying "mutually exclusive" rather than two switches that
- *    can both be on.
+ * 3. **Resample** to an even node spacing.
+ *
+ * It used to offer **downsample** (keep every Nth node) as the other value of that last enum,
+ * one field holding one of three values being the structural way of saying the two could not
+ * both run. Downsampling now lives on Simplify Skeletons, beside the twig pruning and the two
+ * geometry-aware methods it belongs with: removing nodes and moving them are different
+ * questions, and only the first can carry a computed split through. The option is still here
+ * **for a file that already chose it** — declared `retired`, so offered only while it is the
+ * stored value, run exactly as before, and flagged on the card — so an old workflow keeps its
+ * result rather than quietly becoming a pass-through.
  *
  * ## Why this is worth having
  *
@@ -24,8 +29,6 @@
  * quantity per node is otherwise weighted by how finely each neurite happened to be traced,
  * and node density varies tenfold within one neuron. **Smooth is the step NBLAST wants**: a
  * raw traced skeleton overstates every angle, and tangent vectors are fitted to exactly those.
- * **Downsample is the step the 3D viewer wants** — it is the one control here that makes a
- * five-hundred-neuron scene draw.
  *
  * ## What it does not do
  *
@@ -49,6 +52,7 @@ import { isSkeletonsValue } from '../../core/values'
 import { runCleanSkeletons } from '../../pyodide/skeletons'
 import {
   checkCleanUnits,
+  micrometreMixup,
   checkResampleSize,
   cleanRequestFrom,
   emptiedItems,
@@ -65,14 +69,13 @@ registerNode({
   category: 'transform',
   description: 'Heal, smooth and re-sample skeletons before measuring or comparing them.',
   guide:
-    'Four optional repairs for traced skeletons, applied in this order: reconnect fragments, ' +
-    'smooth out tracing jitter, then either re-sample to an even node spacing or keep every ' +
-    'Nth node. Re-sample before morphometrics that average per node, which are otherwise ' +
-    'weighted by how finely each neurite was traced. Distances are in micrometres. The number ' +
-    'of nodes changes; the number of neurons does not.',
+    'Heal, smooth and re-sample traced skeletons, in that order: reconnect fragments, take ' +
+    'out tracing jitter, then lay the nodes out at an even spacing. Re-sample before NBLAST or ' +
+    'any measurement that averages per node. Distances are in micrometres; the number of ' +
+    'neurons never changes.',
   /*
    * `expensive` and not close: this runs in a Python runtime that is a ten megabyte download
-   * on first use. There is no cheap path — every one of the four operations is a fastcore
+   * on first use. There is no cheap path — every one of the operations is a fastcore
    * call — and `cheap` would fire the whole pipeline on each keystroke of a spacing field.
    */
   cost: 'expensive',
@@ -113,9 +116,14 @@ registerNode({
       options: [
         { value: 'none', label: 'leave the nodes alone' },
         { value: 'resample', label: 're-sample to an even spacing' },
-        { value: 'downsample', label: 'keep every Nth node' },
+        // Offered only to a card that already holds it — see the header.
+        {
+          value: 'downsample',
+          label: 'keep every Nth node',
+          retired: 'moved to Simplify Skeletons',
+        },
       ],
-      help: '"re-sample to an even spacing" places new nodes a fixed distance apart. "keep every Nth node" ignores geometry but always keeps roots, branch points and leaves.',
+      help: '"re-sample to an even spacing" places new nodes a fixed distance apart. To keep fewer nodes instead, use Simplify Skeletons.',
     },
     {
       id: 'spacing',
@@ -152,13 +160,19 @@ registerNode({
     const issues: string[] = []
     if (isNoOp(params))
       issues.push('No cleaning step is switched on, so the skeletons pass through unchanged.')
+    if (params.method === 'downsample') {
+      issues.push(
+        '`Keep every Nth node` has moved to Simplify Skeletons, which also keeps the soma and ' +
+          'any axon/dendrite split. This card still runs it so the workflow gives the same ' +
+          'result; to switch, set `Node spacing` to "leave the nodes alone" and add Simplify ' +
+          'Skeletons after it.',
+      )
+    }
     if (params.method === 'resample' && params.spacing > 0 && params.spacing < 0.1) {
       // Not a refusal — `checkResampleSize` handles the case that would actually fail — but a
       // spacing this fine is nearly always a µm/nm mix-up, and saying so at edit time is
       // cheaper than saying it after the wait.
-      issues.push(
-        `\`Spacing (µm)\` is ${params.spacing} µm. This setting is in micrometres; check you did not enter nanometres.`,
-      )
+      issues.push(micrometreMixup('Spacing (µm)', params.spacing))
     }
     return issues
   },

@@ -34,7 +34,7 @@ import type {
   CellValue,
   ColumnData,
   GeometryUnits,
-  MatrixValue,
+  AdjacencyMatrix,
   MeshGeometry,
   MeshesValue,
   PointsValue,
@@ -71,7 +71,11 @@ import type {
   ViewerSceneRequest,
 } from '../source'
 import {
-  SYNAPSES_BETWEEN_SCHEMA,
+  drawnEnd,
+  numberOrNull,
+  partnerPositions,
+  synapsesBetweenSchema,
+  synapsesBetweenTable,
   asksForNoSynapses,
   reportSourceLearned,
   requireSkeletonRoute,
@@ -1095,7 +1099,7 @@ export class CaveSource implements DataSource {
     )
   }
 
-  async fetchAdjacency(req: AdjacencyRequest): Promise<MatrixValue> {
+  async fetchAdjacency(req: AdjacencyRequest): Promise<AdjacencyMatrix> {
     const { spec, version } = this.require(req.datasetId)
 
     const [edges, types] = await Promise.all([
@@ -1106,9 +1110,11 @@ export class CaveSource implements DataSource {
         undefined,
         req.signal,
       ),
-      req.groupByType ? this.typeLookup(req) : undefined,
+      // Only to group: per neuron the type would cost the whole neuron index cold, and the
+      // node fills it from the tables wired in (`matrixToLinks`).
+      req.groupByType ? this.typeLookup(req) : new Map<string, string>(),
     ])
-    return matrixFromEdges(edges, req.sourceIds, req.targetIds, types)
+    return matrixFromEdges(edges, req.sourceIds, req.targetIds, types, req.groupByType)
   }
 
   /**
@@ -2050,7 +2056,7 @@ export class CaveSource implements DataSource {
       return {
         kind: 'points',
         positions: new Float32Array(0),
-        attributes: emptyTable(SYNAPSES_BETWEEN_SCHEMA),
+        attributes: emptyTable(synapsesBetweenSchema(req.location)),
         bounds: EMPTY_BOUNDS,
         ...frame,
       }
@@ -2058,18 +2064,24 @@ export class CaveSource implements DataSource {
     const options = this.options(req.signal)
     const synapses = await this.synapsesFor(spec, options)
     if (!synapses) throw new CaveError(`${spec.label} publishes no synapse table.`)
-    const position = endPositionColumn(synapses, req.location)
+    const drawn = drawnEnd(req.location)
+    const position = endPositionColumn(synapses, drawn)
     if (!position) {
       throw new CaveError(
-        `${spec.label}'s synapse table names its ${req.location}synaptic end ` +
-          `"${req.location === 'pre' ? synapses.preColumn : synapses.postColumn}", so Coda cannot ` +
+        `${spec.label}'s synapse table names its ${drawn}synaptic end ` +
+          `"${drawn === 'pre' ? synapses.preColumn : synapses.postColumn}", so Coda cannot ` +
           `tell which column holds that end's position.`,
       )
     }
+    // `'both'`'s second end. Where it cannot be named the cloud has one end, which is
+    // `SynapseDraw`'s degraded answer rather than a refusal: the drawn end is still exact.
+    const partnerPosition =
+      req.location === 'both' ? endPositionColumn(synapses, 'post') : undefined
     const server = await this.serverFor(spec)
 
     const cut = scoreCut(req, spec.label, synapses)
     const columns = [synapses.preColumn, synapses.postColumn, position]
+    if (partnerPosition) columns.push(partnerPosition)
     if (synapses.scoreColumn) columns.push(synapses.scoreColumn)
     req.onProgress?.(0.15, 'querying')
 
@@ -2102,6 +2114,12 @@ export class CaveSource implements DataSource {
     const neuronIds = new Array<string>(rows.length)
     const partnerIds = new Array<string>(rows.length)
     const confidences = new Array<number | null>(rows.length)
+    const partner = partnerPosition
+      ? {
+          columns: partnerPositions(rows.length),
+          keys: ['x', 'y', 'z'].map((axis) => `${partnerPosition}_${axis}`),
+        }
+      : undefined
     const xKey = `${position}_x`
     const yKey = `${position}_y`
     const zKey = `${position}_z`
@@ -2112,20 +2130,26 @@ export class CaveSource implements DataSource {
       neuronIds[i] = String(row[synapses.preColumn])
       partnerIds[i] = String(row[synapses.postColumn])
       const score = synapses.scoreColumn ? row[synapses.scoreColumn] : undefined
-      confidences[i] = score === null || score === undefined ? null : Number(score)
+      confidences[i] = numberOrNull(score)
+      if (partner)
+        for (let axis = 0; axis < 3; axis++)
+          partner.columns[axis]![i] = numberOrNull(row[partner.keys[axis]!])
     })
 
     return {
       kind: 'points',
       positions,
-      attributes: makeTable(SYNAPSES_BETWEEN_SCHEMA, {
-        [ID_COLUMN_NAME]: neuronIds,
-        type: neuronIds.map((id) => types.get(id) ?? null),
-        partnerId: partnerIds,
-        partnerType: partnerIds.map((id) => types.get(id) ?? null),
-        polarity: new Array<string>(rows.length).fill(req.location),
-        confidence: confidences,
-      }),
+      attributes: synapsesBetweenTable(
+        {
+          [ID_COLUMN_NAME]: neuronIds,
+          type: neuronIds.map((id) => types.get(id) ?? null),
+          partnerId: partnerIds,
+          partnerType: partnerIds.map((id) => types.get(id) ?? null),
+          polarity: new Array<string>(rows.length).fill(drawn),
+          confidence: confidences,
+        },
+        partner?.columns,
+      ),
       bounds: boundsOf([positions]),
       ...frame,
     }

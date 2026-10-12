@@ -16,7 +16,7 @@ import { NUMERIC_DTYPES, column, tableSchema } from '../../core/types'
 import { cableLength, getColumn } from '../../core/values'
 import type { FilterRow } from '../filterRows'
 
-import { NeuPrintSource } from './NeuPrintSource'
+import { NeuPrintSource, somaPoint } from './NeuPrintSource'
 import { PATH_STEP_SCHEMA } from '../source'
 import { SYNAPSE_UNITS } from '../synapseUnits'
 import { THUMBNAIL_MAX_BYTES, THUMBNAIL_MAX_FLAT_BYTES } from '../precomputed'
@@ -2543,6 +2543,15 @@ describe('synapsesBetweenCypher', () => {
     expect(synapsesBetweenCypher(base)).toContain('RETURN n.bodyId, n.type, m.bodyId, m.type,')
   })
 
+  it('returns the postsynaptic site after the rest under both, drawing the presynaptic one', () => {
+    const both = synapsesBetweenCypher({ ...base, location: 'both' })
+    // Both ends are matched for every location; only the RETURN differs.
+    expect(both.replace(/,\s*ms\.location\.x, ms\.location\.y, ms\.location\.z$/, '')).toBe(
+      synapsesBetweenCypher(base),
+    )
+    expect(both).toMatch(/ns\.confidence, ms\.location\.x, ms\.location\.y, ms\.location\.z$/)
+  })
+
   it('binds the given end and leaves the other open, from either side', () => {
     // Sources only: everything they synapse onto. No target filter, and still bound first.
     const down = synapsesBetweenCypher({ ...base, targetIds: undefined }).split('\n')
@@ -2583,5 +2592,22 @@ describe('synapsesBetweenCypher', () => {
     expect(synapsesBetweenCypher({ ...base, minConfidence: 0.7 })).toContain(
       'WHERE ns.confidence >= 0.7 AND ms.confidence >= 0.7',
     )
+  })
+})
+
+describe('somaPoint', () => {
+  it('reads a neo4j point and nothing else', () => {
+    // As neuPrint returns male-CNS 48122's `somaLocation`.
+    const point = {
+      coordinates: [59928, 14579, 36482],
+      crs: { name: 'cartesian-3d' },
+      type: 'Point',
+    }
+    expect(somaPoint(point)).toEqual([59928, 14579, 36482])
+    // Absent or malformed is no soma, never a soma at the origin.
+    expect(somaPoint(null)).toBeNull()
+    expect(somaPoint(undefined)).toBeNull()
+    expect(somaPoint({ coordinates: [1, 2] })).toBeNull()
+    expect(somaPoint({ coordinates: [1, 'x', 3] })).toBeNull()
   })
 })

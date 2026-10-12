@@ -219,3 +219,32 @@ describe('validate', () => {
     expect(issues?.[0]).toContain('Join')
   })
 })
+
+describe('a join that attaches nothing', () => {
+  function warned(params: Record<string, unknown>, table: TableValue): string[] {
+    const warnings: string[] = []
+    const ctx = { ...ctxFor(params, skeletons(), table), warn: (m: string) => warnings.push(m) }
+    ;(def.evaluate as (c: unknown) => unknown)(ctx)
+    return warnings
+  }
+
+  it('says so when the key column is empty, as a Reduce Matrix over unrecorded lines leaves it', () => {
+    // `neuronId` exists, so the picker stays on it — and every cell is null.
+    const reduced = tableFromRows(
+      tableSchema(column('label', 'str'), column('neuronId', 'str'), column('mean', 'f64')),
+      [
+        { label: '1', neuronId: null, mean: 0.25 },
+        { label: '2', neuronId: null, mean: 0.5 },
+      ],
+    )
+    expect(warned({}, reduced).join(' ')).toMatch(/`neuronId` is empty in every row/)
+    expect(warned({ matchOn: 'label' }, reduced)).toEqual([])
+  })
+
+  it('says so when no row names any of these neurons', () => {
+    const elsewhere = tableFromRows(STATS, [{ label: '999', zap_mean: 1 }])
+    expect(warned({ matchOn: 'label' }, elsewhere).join(' ')).toMatch(
+      /No row of the table matched/,
+    )
+  })
+})

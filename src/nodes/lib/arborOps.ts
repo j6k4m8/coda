@@ -32,11 +32,12 @@ import { quantileSorted } from '../../core/stats'
 import type { TableSchema } from '../../core/types'
 import { column, tableSchema } from '../../core/types'
 import type { GeometryUnits, PointsValue, SkeletonGeometry } from '../../core/values'
-import { SWC_SOMA, makeTable } from '../../core/values'
+import { makeTable } from '../../core/values'
 import type { SynapseSite } from './topologyOps'
 import { assignSynapses } from './topologyOps'
 import { selectPoints } from './iterables'
 import { NM_PER_UM, geometryUnitsProblem } from '../../data/units'
+import { widestSomaNode } from '../../data/soma'
 
 /** A neuron re-rooted at one node, with the arrays every walk over it needs. */
 export interface Arbor {
@@ -101,13 +102,9 @@ export function resolveRoot(skeleton: SkeletonGeometry, choice: RootChoice): Res
   if (typeof choice === 'number' && Number.isInteger(choice) && choice >= 0 && choice < n) {
     return { node: choice, fellBack: false }
   }
-  if (choice === 'soma' && skeleton.compartments) {
-    let best = -1
-    for (let i = 0; i < n; i++) {
-      if (skeleton.compartments[i] !== SWC_SOMA) continue
-      if (best < 0 || skeleton.radii[i]! > skeleton.radii[best]!) best = i
-    }
-    if (best >= 0) return { node: best, fellBack: false }
+  if (choice === 'soma') {
+    const soma = widestSomaNode(skeleton)
+    if (soma >= 0) return { node: soma, fellBack: false }
   }
   return { node: largestFragmentRoot(skeleton.parents), fellBack: choice !== 'source' }
 }

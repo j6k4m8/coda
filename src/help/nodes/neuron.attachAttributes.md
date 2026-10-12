@@ -4,7 +4,7 @@ Attach Attributes joins the columns of a table onto skeletons, meshes or points,
 caption: Attach mean activity per neuron to the skeletons and colour the 3D View by it.
 neuron.skeletons as skel
 core.reduceMatrix as red
-neuron.attachAttributes as attach { matchOn: label }
+neuron.attachAttributes as attach
 out.viewer3d as v3d
 skel -> attach:in
 red -> attach:table
@@ -17,7 +17,7 @@ neuron.attachAttributes: matchOn, columns
 
 ## Matching
 
-Rows of the table are matched against the `neuronId` of each skeleton, mesh or point. Use `Match table on` to pick the table column that holds those ids. Note that Reduce Matrix, Cut Tree and [Embedding](#core.embed) call that column `label`, not `neuronId`.
+Rows of the table are matched against the `neuronId` of each skeleton, mesh or point. Use `Match table on` to pick the table column that holds those ids. Reduce Matrix writes a `neuronId` column, so its tables match as they are. [Cut Tree](#cluster.cut) and [Embedding](#core.embed) call that column `label`, so pick `label` for those. If no row of the table matches, the card says so and attaches nothing.
 
 For points (e.g. synapses), each point gets the values of the neuron it belongs to. That way you can, for example, colour a synapse cloud by the cell type of the presynaptic neuron.
 

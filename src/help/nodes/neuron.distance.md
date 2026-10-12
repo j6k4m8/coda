@@ -46,7 +46,7 @@ In practice this means:
 "closest approach" and "furthest from the other" are not averages and ignore the weights.
 
 > [!TIP] You don't need to resample for this node
-> Clean Skeletons is still worth using to make skeletons from two
+> [Clean Skeletons](#neuron.cleanSkeletons) is still worth using to make skeletons from two
 > datasets comparable in shape for NBLAST, but you don't need it to get meaningful mean distances
 > here.
 

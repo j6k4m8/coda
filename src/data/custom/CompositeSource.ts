@@ -37,7 +37,7 @@ import { ID_COLUMN_NAME } from '../../core/ids'
 import type {
   DatasetAnnotations,
   DatasetEdges,
-  MatrixValue,
+  AdjacencyMatrix,
   MeshesValue,
   PointsValue,
   SkeletonProvenance,
@@ -197,7 +197,7 @@ export class CompositeSource implements DataSource {
     return noConnectivity()
   }
 
-  fetchAdjacency(_req: AdjacencyRequest): Promise<MatrixValue> {
+  fetchAdjacency(_req: AdjacencyRequest): Promise<AdjacencyMatrix> {
     return noConnectivity()
   }
 

@@ -205,7 +205,11 @@ export class ByteLedger {
         return value.annotations ? this.table(value.annotations.table) : 0
       case 'matrix':
         return (
-          this.buffer(value.values) + this.array(value.rowLabels) + this.array(value.colLabels)
+          this.buffer(value.values) +
+          this.array(value.rowLabels) +
+          this.array(value.colLabels) +
+          // One small record per line, where a source said what each one is.
+          (value.lines ? this.items(value.lines.rows) + this.items(value.lines.cols) : 0)
         )
       case 'network':
         return this.table(value.nodes) + this.table(value.edges)

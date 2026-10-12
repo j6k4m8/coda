@@ -16,10 +16,10 @@ import { DatasetListing } from '../datasetListing'
 import { PeekGate } from '../peekGate'
 import type { TableSchema } from '../../core/types'
 import type {
+  AdjacencyMatrix,
   ColumnData,
   CellValue,
   GeometryUnits,
-  MatrixValue,
   MeshesValue,
   PointsValue,
   SkeletonGeometry,
@@ -32,7 +32,6 @@ import {
   boundsOf,
   cableLength,
   emptyTable,
-  makeMatrix,
   makeTable,
   tableFromRows,
 } from '../../core/values'
@@ -62,6 +61,7 @@ import type {
   SynapseTotalsRequest,
   ViewerSceneRequest,
 } from '../source'
+import { matrixFromEdges } from '../connectivity'
 import { SYNAPSE_UNITS } from '../synapseUnits'
 import {
   CANONICAL_SCHEMAS,
@@ -70,7 +70,11 @@ import {
   connectivitySchemaWithEdgeProperties,
   connectivitySchemaWithRoi,
   SYNAPSE_TOTALS_SCHEMA,
-  SYNAPSES_BETWEEN_SCHEMA,
+  drawnEnd,
+  numberOrNull,
+  partnerPositions,
+  synapsesBetweenSchema,
+  synapsesBetweenTable,
   asksForNoSynapses,
   ROI_CONNECTIVITY_SCHEMA,
   ROI_MESH_SCHEMA,
@@ -144,6 +148,7 @@ import { SKELETON_ROUTES, route } from '../skeletonRoutes'
 import type { DiscoveredSchema } from './schema'
 import { discoverEdgeProperties, discoverNeuronSchema, schemasFor } from './schema'
 import type { VoxelScale } from '../units'
+import { withSomaAt } from '../soma'
 import {
   IDENTITY_SCALE,
   geometryUnitsFor,
@@ -215,6 +220,8 @@ interface NeuronRow {
   instance: string | null
   status: string | null
   size: number | null
+  /** `somaLocation`, in dataset voxels; null for a body with no soma recorded. */
+  soma: [number, number, number] | null
 }
 
 /**
@@ -918,9 +925,9 @@ export class NeuPrintSource implements DataSource {
     return tableFromCypher(response, PATH_STEP_SCHEMA)
   }
 
-  async fetchAdjacency(req: AdjacencyRequest): Promise<MatrixValue> {
+  async fetchAdjacency(req: AdjacencyRequest): Promise<AdjacencyMatrix> {
     if (req.sourceIds.length === 0 || req.targetIds.length === 0) {
-      return makeMatrix([], [], new Float64Array(0), 'synapses')
+      return matrixFromEdges([], [], [], new Map(), false)
     }
     const response = await runCypher(
       adjacencyCypher(req),
@@ -1351,12 +1358,25 @@ export class NeuPrintSource implements DataSource {
   ): SkeletonsValue {
     const data: Record<string, ColumnData> = {}
     for (const col of schema.columns) data[col.name] = []
+    const scale = this.scaleFor(datasetId)
+    const items: SkeletonGeometry[] = []
     for (const [neuronId, item] of pairs) {
-      pushNeuronRow(data, neuronId, meta.get(neuronId))
+      const row = meta.get(neuronId)
+      pushNeuronRow(data, neuronId, row)
       data['points']!.push(item.parents.length)
       data['cableLength']!.push(cableLength(item))
+      // Neither route labels a soma, so `somaLocation` says where it is — in voxels, where both
+      // routes are nanometres by now, hence the scale.
+      items.push(
+        row?.soma
+          ? withSomaAt(
+              item,
+              [row.soma[0] * scale[0], row.soma[1] * scale[1], row.soma[2] * scale[2]],
+              SOMA_SNAP_NM,
+            )
+          : item,
+      )
     }
-    const items = pairs.map(([, item]) => item)
     return {
       kind: 'skeletons',
       items,
@@ -1519,7 +1539,7 @@ export class NeuPrintSource implements DataSource {
       return {
         kind: 'points',
         positions: new Float32Array(0),
-        attributes: emptyTable(SYNAPSES_BETWEEN_SCHEMA),
+        attributes: emptyTable(synapsesBetweenSchema(req.location)),
         bounds: EMPTY_BOUNDS,
         ...frame,
       }
@@ -1533,14 +1553,16 @@ export class NeuPrintSource implements DataSource {
     )
     req.onProgress?.(0.7, `${response.data.length} synapses`)
 
-    // RETURN order: neuronId, type, partnerId, partnerType, x, y, z, confidence.
+    // RETURN order: neuronId, type, partnerId, partnerType, x, y, z, confidence, and under
+    // `'both'` the postsynaptic x, y, z.
     const length = response.data.length
     const positions = new Float32Array(length * 3)
+    const partner = req.location === 'both' ? partnerPositions(length) : undefined
     const neuronIds = new Array<string | null>(length)
     const types = new Array<string | null>(length)
     const partnerIds = new Array<string | null>(length)
     const partnerTypes = new Array<string | null>(length)
-    const polarities = new Array<string>(length).fill(req.location)
+    const polarities = new Array<string>(length).fill(drawnEnd(req.location))
     const confidences = new Array<number | null>(length)
     response.data.forEach((row, i) => {
       positions[i * 3] = (Number(row[4]) || 0) * scale[0]
@@ -1550,20 +1572,29 @@ export class NeuPrintSource implements DataSource {
       types[i] = row[1] === null || row[1] === undefined ? null : String(row[1])
       partnerIds[i] = idText(row[2] as CellValue)
       partnerTypes[i] = row[3] === null || row[3] === undefined ? null : String(row[3])
-      confidences[i] = row[7] === null || row[7] === undefined ? null : Number(row[7])
+      confidences[i] = numberOrNull(row[7])
+      if (partner) {
+        for (let axis = 0; axis < 3; axis++) {
+          const v = numberOrNull(row[8 + axis])
+          partner[axis]![i] = v === null ? null : v * scale[axis]!
+        }
+      }
     })
 
     return {
       kind: 'points',
       positions,
-      attributes: makeTable(SYNAPSES_BETWEEN_SCHEMA, {
-        [ID_COLUMN_NAME]: neuronIds,
-        type: types,
-        partnerId: partnerIds,
-        partnerType: partnerTypes,
-        polarity: polarities,
-        confidence: confidences,
-      }),
+      attributes: synapsesBetweenTable(
+        {
+          [ID_COLUMN_NAME]: neuronIds,
+          type: types,
+          partnerId: partnerIds,
+          partnerType: partnerTypes,
+          polarity: polarities,
+          confidence: confidences,
+        },
+        partner,
+      ),
       bounds: boundsOf([positions]),
       ...frame,
     }
@@ -1772,7 +1803,7 @@ export class NeuPrintSource implements DataSource {
     const cypher = [
       'MATCH (n:Neuron)',
       `WHERE n.bodyId IN ${idList(neuronIds)}`,
-      'RETURN n.bodyId, n.type, n.instance, n.status, n.size',
+      'RETURN n.bodyId, n.type, n.instance, n.status, n.size, n.somaLocation',
     ].join('\n')
     const response = await runCypher(cypher, datasetId, this.options(signal))
     for (const row of response.data) {
@@ -1780,7 +1811,8 @@ export class NeuPrintSource implements DataSource {
         type: row[1] === null || row[1] === undefined ? null : String(row[1]),
         instance: row[2] === null || row[2] === undefined ? null : String(row[2]),
         status: row[3] === null || row[3] === undefined ? null : String(row[3]),
-        size: row[4] === null || row[4] === undefined ? null : Number(row[4]),
+        size: numberOrNull(row[4]),
+        soma: somaPoint(row[5]),
       })
     }
     return out
@@ -1790,6 +1822,26 @@ export class NeuPrintSource implements DataSource {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * How far `somaLocation` may sit from the node that stands for it: half of a 4 µm soma, the
+ * largest a fly soma gets. The location is the soma's centre, so anything further than its radius
+ * is a skeleton that does not reach the soma at all, and labelling some distant node would root
+ * the arbour in the wrong place with every downstream measure agreeing.
+ */
+export const SOMA_SNAP_NM = 2000
+
+/**
+ * A neo4j spatial point as `[x, y, z]`, or null. neuPrint returns `somaLocation` as
+ * `{type: 'Point', coordinates: [x, y, z], crs}`; anything else — absent, a malformed list — is
+ * no soma rather than a soma at the origin.
+ */
+export function somaPoint(cell: unknown): [number, number, number] | null {
+  const coords = (cell as { coordinates?: unknown } | null | undefined)?.coordinates
+  if (!Array.isArray(coords) || coords.length < 3) return null
+  const [x, y, z] = coords.map(Number)
+  return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) ? [x!, y!, z!] : null
+}
 
 /** `hemibrain:v1.2.1` -> label "hemibrain", version "v1.2.1". */
 export function splitDatasetId(id: string): [string, string | undefined] {
@@ -1853,56 +1905,26 @@ function emptyDiscovered(): DiscoveredSchema {
  * to return, so an adjacency matrix lines up with the neuron table it came from and a
  * missing pair reads as a zero rather than shifting the grid.
  */
-function matrixFromConnections(response: CypherResponse, req: AdjacencyRequest): MatrixValue {
-  /*
-   * Both endpoint ids are stringified once, here, and indexed by row below.
-   *
-   * The label pass and the matrix pass each need the same two keys, and every id neuPrint
-   * sends is a JSON number — so doing it per pass is two to four `String()` allocations per
-   * row where two will do. On a 2000x2000 adjacency that is a few hundred thousand transient
-   * strings. Two pointer arrays are both cheaper and smaller than the duplicates they replace.
-   */
-  const rows = response.data
-  const srcKeys = new Array<string>(rows.length)
-  const dstKeys = new Array<string>(rows.length)
+function matrixFromConnections(
+  response: CypherResponse,
+  req: AdjacencyRequest,
+): AdjacencyMatrix {
+  // Each id stringified once, read by both the type map and the edge.
   const label = new Map<string, string>()
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]!
-    const src = (srcKeys[i] = idKey(row[0]))
-    const dst = (dstKeys[i] = idKey(row[2]))
-    if (typeof row[1] === 'string') label.set(src, row[1])
-    if (typeof row[3] === 'string') label.set(dst, row[3])
-  }
-
-  if (req.groupByType) {
-    const key = (id: string) => label.get(id) ?? id
-    const rowKeys = [...new Set(req.sourceIds.map(key))]
-    const colKeys = [...new Set(req.targetIds.map(key))]
-    const rowIndex = new Map(rowKeys.map((k, i) => [k, i]))
-    const colIndex = new Map(colKeys.map((k, i) => [k, i]))
-    const values = new Float64Array(rowKeys.length * colKeys.length)
-    for (let i = 0; i < rows.length; i++) {
-      const r = rowIndex.get(key(srcKeys[i]!))
-      const c = colIndex.get(key(dstKeys[i]!))
-      if (r === undefined || c === undefined) continue
-      values[r * colKeys.length + c] =
-        (values[r * colKeys.length + c] ?? 0) + Number(rows[i]![4] ?? 0)
-    }
-    return makeMatrix(rowKeys, colKeys, values, 'synapses')
-  }
-
-  const rowIndex = new Map(req.sourceIds.map((id, i) => [id, i]))
-  const colIndex = new Map(req.targetIds.map((id, i) => [id, i]))
-  const values = new Float64Array(req.sourceIds.length * req.targetIds.length)
-  for (let i = 0; i < rows.length; i++) {
-    const r = rowIndex.get(srcKeys[i]!)
-    const c = colIndex.get(dstKeys[i]!)
-    if (r === undefined || c === undefined) continue
-    values[r * req.targetIds.length + c] = Number(rows[i]![4] ?? 0)
-  }
-  const name = (id: string) => {
-    const type = label.get(id)
-    return type ? `${type} ${id}` : id
-  }
-  return makeMatrix(req.sourceIds.map(name), req.targetIds.map(name), values, 'synapses')
+  const edges = response.data.map((row) => {
+    const pre = idKey(row[0])
+    const post = idKey(row[2])
+    if (typeof row[1] === 'string') label.set(pre, row[1])
+    if (typeof row[3] === 'string') label.set(post, row[3])
+    return { pre, post, weight: Number(row[4] ?? 0) }
+  })
+  // The shared fold in both modes; neuPrint's own display label, `type id`, per neuron.
+  return matrixFromEdges(
+    edges,
+    req.sourceIds,
+    req.targetIds,
+    label,
+    req.groupByType,
+    (key, line) => (line.id !== null && line.type ? `${line.type} ${line.id}` : key),
+  )
 }

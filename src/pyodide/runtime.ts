@@ -144,13 +144,19 @@ interface PyProxy {
   destroy(): void
 }
 
+/** A Python dict as Pyodide proxies it, `get` reading a key: one module's globals. */
+interface PyNamespace extends PyProxy {
+  get(name: string): PyProxy | undefined
+}
+
 interface PyodideApi {
   loadPackage(
     names: string | string[],
     options?: { messageCallback?: (message: string) => void },
   ): Promise<unknown>
-  runPython(code: string): unknown
-  globals: { get(name: string): PyProxy | undefined }
+  runPython(code: string, options?: { globals?: PyNamespace }): unknown
+  /** A JS object as a Python one — for a plain object, a dict proxy. */
+  toPy(value: object): unknown
   /**
    * Emscripten's module, not Pyodide's public surface — read for the heap's size and nothing
    * else, as `scripts/lib/pyodideProbe.mjs` already does. Optional because it is not a promise.
@@ -163,7 +169,11 @@ interface PyodideModule {
 }
 
 let bootPromise: Promise<PyodideApi> | undefined
-const loaded = new Set<string>()
+/**
+ * Each module's own globals, never one shared `py.globals` — see `docs/python-pyodide.md`. Held for
+ * the session: a module's functions read their helpers from it at call time.
+ */
+const namespaces = new Map<string, PyNamespace>()
 
 async function boot(report: Report): Promise<PyodideApi> {
   if (!bootPromise) {
@@ -227,7 +237,8 @@ export async function callPython(
 ): Promise<PyResult> {
   const py = await boot(report)
 
-  if (!loaded.has(module)) {
+  let namespace = namespaces.get(module)
+  if (!namespace) {
     const spec = MODULES[module]
     if (!spec) throw new Error(`No Python module called "${module}"`)
     report(0.1, spec.label)
@@ -235,11 +246,13 @@ export async function callPython(
     // the second request's DNS, TLS and slow-start all wait on the first transfer finishing —
     // 2.9 MB and 1.1 MB, on the one path where the whole ten megabytes is already being paid.
     await py.loadPackage(spec.packages, { messageCallback: () => {} })
-    py.runPython(spec.source)
-    loaded.add(module)
+    // `__name__` seeded, as an import would, so a class or a traceback names its module.
+    namespace = py.toPy({ __name__: module }) as PyNamespace
+    py.runPython(spec.source, { globals: namespace })
+    namespaces.set(module, namespace)
   }
 
-  const callable = py.globals.get(fn)
+  const callable = namespace.get(fn)
   if (!callable) throw new Error(`Python module "${module}" defines no "${fn}"`)
 
   let out: PyProxy | undefined

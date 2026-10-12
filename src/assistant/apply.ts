@@ -35,7 +35,13 @@ import {
 import type { InferenceResult, IssueSeverity } from '../core/inference'
 import { checkConnection, inferGraph, nodeTypes } from '../core/inference'
 import type { NodeDefinition, ParamDef, ParamValue, ParamValues } from '../core/node'
-import { configurableParams, defaultParams, findParam, validateParamValue } from '../core/node'
+import {
+  configurableParams,
+  defaultParams,
+  findParam,
+  retiredIn,
+  validateParamValue,
+} from '../core/node'
 import { authoredNodeDef, getNodeDef } from '../core/registry'
 import { CARD_GAP, GRID_ORIGIN, placeInColumns } from '../layout/columns'
 import { boundsOf } from '../layout/place'
@@ -490,7 +496,20 @@ function checkParams(
     }
 
     const problem = validateParamValue(param, params[paramId]!)
-    if (problem) problems.push(`${at}: ${problem}`)
+    if (problem) {
+      problems.push(`${at}: ${problem}`)
+      continue
+    }
+    // Valid on load, never chosen anew — and naming it in a plan is choosing it.
+    const retired =
+      (param.kind === 'enum' || param.kind === 'multiEnum') && Array.isArray(param.options)
+        ? retiredIn(param.options, params[paramId])
+        : undefined
+    if (retired) {
+      problems.push(
+        `${at}: "${paramId}" no longer offers "${retired.value}": ${retired.retired}.`,
+      )
+    }
   }
   return problems
 }

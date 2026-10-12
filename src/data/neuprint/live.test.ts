@@ -32,6 +32,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { getColumn } from '../../core/values'
 import { NeuPrintSource } from './NeuPrintSource'
 import { resetCredentials, setToken } from './credentials'
+import { expectShortHops, sortedPoints } from '../../test/synapseEnds'
 
 const TOKEN = process.env.NEUPRINT_TOKEN
 const live = TOKEN ? describe : describe.skip
@@ -437,6 +438,25 @@ live('synapses between two sets, live', () => {
     }
     // Location moves the points and never the row set.
     expect(counts[0]).toBe(counts[1])
+  }, 120_000)
+
+  it('returns both ends under both, each a short hop from the other', async () => {
+    /*
+     * The presynaptic point is the `'pre'` cloud's, row for row in a set sense (Cypher promises no
+     * order), and the postsynaptic one is its PSD — a few hundred nanometres away. What this
+     * catches is a column read off the wrong end or left in voxels: either puts the "partner" end
+     * microns from its T-bar.
+     */
+    setToken(TOKEN!)
+    const source = new NeuPrintSource()
+    const ask = (location: 'pre' | 'both') =>
+      source.fetchSynapsesBetween!({ datasetId: DATASET, sourceIds: [BODY], location })
+    const [pre, both] = await Promise.all([ask('pre'), ask('both')])
+    expect(both.attributes.length).toBeGreaterThan(0)
+    expect(both.attributes.length).toBe(pre.attributes.length)
+    expect(sortedPoints(both)).toEqual(sortedPoints(pre))
+    // Every row, not a typical one: median 197 nm and largest 545 over 30,020 on body 10003 when written.
+    expectShortHops(both)
   }, 120_000)
 
   it('leaves either end open, answering every synapse the body makes or receives', async () => {

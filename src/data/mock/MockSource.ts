@@ -9,7 +9,7 @@
 
 import type {
   GeometryUnits,
-  MatrixValue,
+  AdjacencyMatrix,
   MeshGeometry,
   MeshesValue,
   PointsValue,
@@ -20,7 +20,7 @@ import type {
 } from '../../core/values'
 import { ID_COLUMN_NAME, compareIds, idText, numericIds } from '../../core/ids'
 import type { CellValue } from '../../core/values'
-import { boundsOf, cableLength, makeMatrix, selectRows, tableFromRows } from '../../core/values'
+import { boundsOf, cableLength, selectRows, tableFromRows } from '../../core/values'
 import { geometryFrame } from '../transforms/spaces'
 import type {
   AdjacencyRequest,
@@ -42,13 +42,18 @@ import type {
   SourceCapabilities,
   SourceSchemas,
   SynapseRequest,
+  SynapseLocation,
   SynapsesBetweenRequest,
   SynapseTotalsBasis,
   SynapseTotalsRequest,
 } from '../source'
+import type { Edge } from '../connectivity'
+import { matrixFromEdges } from '../connectivity'
 import {
   CANONICAL_SCHEMAS,
-  SYNAPSES_BETWEEN_SCHEMA,
+  drawnEnd,
+  partnerPositions,
+  synapsesBetweenTable,
   asksForNoSynapses,
   GROUP_TOTALS_SCHEMA,
   PATH_STEP_SCHEMA,
@@ -554,44 +559,36 @@ export class MockSource implements DataSource {
     return tableFromRows(PATH_STEP_SCHEMA, rows)
   }
 
-  async fetchAdjacency(req: AdjacencyRequest): Promise<MatrixValue> {
+  async fetchAdjacency(req: AdjacencyRequest): Promise<AdjacencyMatrix> {
     await delay(this.latencyMs, req.signal)
     const connectome = this.require(req.datasetId)
-    const groupByType = req.groupByType ?? true
     // What fills a cell: the weight, or the property asked for — summed the same way. A property
     // this dataset does not publish is null on a server, and null is 0 in a matrix cell.
     const property = edgePropertyWeight(req.weight)
     const valueOf = (edge: MockConnection): number =>
       property ? (mockEdgeValue(connectome, edge, property) ?? 0) : edge.weight
 
-    const sourceIds = numericIds(req.sourceIds)
-    const targetIds = numericIds(req.targetIds)
-    const rowKeys = this.keysFor(connectome, sourceIds, groupByType)
-    const colKeys = this.keysFor(connectome, targetIds, groupByType)
-    const rowIndex = new Map(rowKeys.labels.map((label, i) => [label, i]))
-    const colIndex = new Map(colKeys.labels.map((label, i) => [label, i]))
-
-    const values = new Float64Array(rowKeys.labels.length * colKeys.labels.length)
-    const targets = new Set(targetIds)
-
-    for (const neuronId of sourceIds) {
+    // The shared fold, on the neurons the mock knows, in the order they were asked for.
+    const known = (ids: readonly string[]) =>
+      ids.filter((id) => connectome.byId.has(Number(id)))
+    const sourceIds = known(req.sourceIds)
+    const targetIds = known(req.targetIds)
+    const types = new Map<string, string>()
+    for (const id of [...sourceIds, ...targetIds]) {
+      const type = connectome.byId.get(Number(id))?.type
+      if (type) types.set(id, type)
+    }
+    const targets = new Set(targetIds.map(Number))
+    const edges: Edge[] = []
+    for (const id of sourceIds) {
       throwIfAborted(req.signal)
-      const rowKey = rowKeys.keyOf.get(neuronId)
-      if (rowKey === undefined) continue
-      const r = rowIndex.get(rowKey)
-      if (r === undefined) continue
-      for (const edge of connectome.out.get(neuronId) ?? []) {
-        if (!targets.has(edge.post)) continue
-        const colKey = colKeys.keyOf.get(edge.post)
-        if (colKey === undefined) continue
-        const c = colIndex.get(colKey)
-        if (c === undefined) continue
-        const at = r * colKeys.labels.length + c
-        values[at] = (values[at] ?? 0) + valueOf(edge)
+      for (const edge of connectome.out.get(Number(id)) ?? []) {
+        if (targets.has(edge.post)) {
+          edges.push({ pre: id, post: publishedId(edge.post), weight: valueOf(edge) })
+        }
       }
     }
-
-    return makeMatrix(rowKeys.labels, colKeys.labels, values, 'synapses')
+    return matrixFromEdges(edges, sourceIds, targetIds, types, req.groupByType)
   }
 
   async fetchRoiCounts(req: RoiCountsRequest): Promise<TableValue> {
@@ -893,7 +890,9 @@ export class MockSource implements DataSource {
     }
 
     const positions: number[] = []
-    const rows: Array<Record<string, CellValue>> = []
+    const pres: number[] = []
+    const posts: number[] = []
+    const partner = req.location === 'both' ? partnerPositions(0) : undefined
     /*
      * Walked from whichever end is bound: every outgoing edge of the sources, kept when the
      * target end is open or names the edge's post; or, with only targets, every incoming edge.
@@ -912,33 +911,45 @@ export class MockSource implements DataSource {
           edges.push(...(connectome.in.get(post) ?? []))
       }
     }
+    // One end of synapse `k` of an edge, on that end's own arbour — the same point whichever
+    // `location` asked for it, so a `'both'` row is the `'pre'` row with the `'post'` point beside.
+    const endOf = (edge: MockConnection, k: number, end: SynapseLocation) => {
+      const post = end === 'post'
+      const other = post ? edge.pre : edge.post
+      return synapsePosition(
+        skeletonOf(post ? edge.post : edge.pre),
+        (other % 65521) * 64 + k,
+        end,
+      )
+    }
+    const drawn = drawnEnd(req.location)
     for (const edge of edges) {
       throwIfAborted(req.signal)
-      const drawnOn = req.location === 'post' ? edge.post : edge.pre
-      const other = req.location === 'post' ? edge.pre : edge.post
       for (let k = 0; k < edge.weight; k++) {
-        const [x, y, z] = synapsePosition(
-          skeletonOf(drawnOn),
-          (other % 65521) * 64 + k,
-          req.location,
-        )
+        const [x, y, z] = endOf(edge, k, drawn)
         positions.push(x, y, z)
-        rows.push({
-          [ID_COLUMN_NAME]: publishedId(edge.pre),
-          type: connectome.byId.get(edge.pre)?.type ?? null,
-          partnerId: publishedId(edge.post),
-          partnerType: connectome.byId.get(edge.post)?.type ?? null,
-          polarity: req.location,
-          confidence: null,
-        })
+        pres.push(edge.pre)
+        posts.push(edge.post)
+        if (partner) endOf(edge, k, 'post').forEach((v, axis) => partner[axis]!.push(v))
       }
     }
 
     const buffer = Float32Array.from(positions)
+    const typeOf = (id: number) => connectome.byId.get(id)?.type ?? null
     return {
       kind: 'points',
       positions: buffer,
-      attributes: tableFromRows(SYNAPSES_BETWEEN_SCHEMA, rows),
+      attributes: synapsesBetweenTable(
+        {
+          [ID_COLUMN_NAME]: pres.map(publishedId),
+          type: pres.map(typeOf),
+          partnerId: posts.map(publishedId),
+          partnerType: posts.map(typeOf),
+          polarity: new Array<string>(pres.length).fill(drawn),
+          confidence: new Array<null>(pres.length).fill(null),
+        },
+        partner,
+      ),
       bounds: boundsOf([buffer]),
       ...this.frame(req.datasetId),
     }
@@ -964,29 +975,6 @@ export class MockSource implements DataSource {
       )
     }
     return connectome
-  }
-
-  /** Map neuron ids to matrix row/column keys — either their type or their own id. */
-  private keysFor(
-    connectome: NonNullable<ReturnType<typeof getConnectome>>,
-    neuronIds: number[],
-    groupByType: boolean,
-  ): { labels: string[]; keyOf: Map<number, string> } {
-    const keyOf = new Map<number, string>()
-    const labels: string[] = []
-    const seen = new Set<string>()
-    for (const neuronId of neuronIds) {
-      const neuron = connectome.byId.get(neuronId)
-      if (!neuron) continue
-      const key = groupByType ? neuron.type : String(neuronId)
-      keyOf.set(neuronId, key)
-      if (!seen.has(key)) {
-        seen.add(key)
-        labels.push(key)
-      }
-    }
-    labels.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-    return { labels, keyOf }
   }
 }
 

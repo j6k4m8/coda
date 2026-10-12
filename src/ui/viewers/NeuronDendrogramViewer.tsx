@@ -450,7 +450,7 @@ export function NeuronDendrogramViewer(props: NeuronDendrogramViewerProps) {
   )
   const data = loaded.status === 'ready' ? loaded.data : undefined
   const raw = data?.skeletons?.items[0]
-  const heal = useHealedSkeleton(data?.skeletons)
+  const heal = useHealedSkeleton(raw)
   // While a forest is being joined, the largest piece is drawn — `resolveRoot`'s choice.
   const healed = heal.status === 'ready' ? heal.data : undefined
   const skeleton = healed?.skeleton ?? raw

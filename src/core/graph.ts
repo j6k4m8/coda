@@ -15,6 +15,8 @@ import { hasPortGroups, allInputPorts, inputPorts, outputPorts } from './ports'
 import { currentType, getNodeDef, typesWithLoops, typesWithReferenceInputs } from './registry'
 import type { CalloutTone } from './markdown'
 import { CALLOUT_TONES } from './markdown'
+import type { CachePolicy } from './cachePolicy'
+import { validCachePolicy } from './cachePolicy'
 
 export const GRAPH_FORMAT_VERSION = 1
 
@@ -74,6 +76,15 @@ export interface GraphNode {
    * remapped by a paste or duplicate (`cloneCaptions`).
    */
   captionOf?: string
+  /**
+   * How long this node may answer from the data it downloaded — **Cache lifetime** on the card's
+   * `cached 3d ago` label. See `core/cachePolicy.ts`.
+   *
+   * On the node rather than in `params` because a param is in the provenance key, and changing a
+   * lifetime must not re-run anything. Absent unless somebody chose something, which is every
+   * node's default and keeps it out of a saved file.
+   */
+  cache?: CachePolicy
 }
 
 /*
@@ -1069,6 +1080,31 @@ export function setNodeHints(
   return { ...graph, nodes }
 }
 
+/**
+ * Set one node's cache lifetime, or clear it with `undefined` — the edit behind **Cache
+ * lifetime**.
+ *
+ * Through `validCachePolicy`, the loader's own pass, for `setNodeHints`' reason. Clearing deletes
+ * the field rather than leaving it `undefined`, and a choice the node already holds returns the
+ * graph **by identity**, so `commit` records no undo step for picking the ticked row.
+ */
+export function setNodeCachePolicy(
+  graph: CodaGraph,
+  id: string,
+  policy: CachePolicy | undefined,
+): CodaGraph {
+  const node = graph.nodes.find((n) => n.id === id)
+  if (!node) return graph
+  const kept = validCachePolicy(policy)
+  if (kept?.maxAgeMs === node.cache?.maxAgeMs) return graph
+  const nodes = graph.nodes.map((n) => {
+    if (n.id !== id) return n
+    const { cache: _old, ...rest } = n
+    return kept ? { ...rest, cache: kept } : rest
+  })
+  return { ...graph, nodes }
+}
+
 function validHints(raw: unknown): NodeHint[] {
   if (!Array.isArray(raw)) return []
   const hints: NodeHint[] = []
@@ -1298,6 +1334,7 @@ export function deserializeGraph(json: string): LoadResult {
     // for it twice per node on every load and every paste.
     const size = validSize(n.size)
     const hints = validHints(n.hints)
+    const cache = validCachePolicy(n.cache)
     nodes.push({
       id: n.id,
       type: ports ? MISSING_TYPE : n.type,
@@ -1314,6 +1351,7 @@ export function deserializeGraph(json: string): LoadResult {
       ...(n.disabled ? { disabled: true } : {}),
       ...(size ? { size } : {}),
       ...(hints.length ? { hints } : {}),
+      ...(cache ? { cache } : {}),
       // Only on a note, and only a string; whether the card it names is here is asked by
       // `pruneCaptions` below, once every node is known.
       ...(typeof n.captionOf === 'string' && getNodeDef(n.type)?.annotation

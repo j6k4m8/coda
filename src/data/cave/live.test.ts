@@ -58,6 +58,7 @@ import { cableLength } from '../../core/values'
 import type { RestoreFetch } from '../../test/precomputedStubs'
 import { serveDracoWasmFromDisk } from '../../test/precomputedStubs'
 import { DEFAULT_CAVE_SERVER } from './deployments'
+import { expectShortHops } from '../../test/synapseEnds'
 
 const TOKEN = process.env.CAVE_TOKEN
 /** Every request below but the H01 block's is on the default deployment. */
@@ -241,6 +242,18 @@ live('CAVE, live', () => {
     })
     expect(cut.attributes.length).toBeGreaterThan(0)
     expect(cut.attributes.length).toBeLessThan(all.attributes.length)
+  }, 600_000)
+
+  it('returns both ends under both, each a short hop from the other', async () => {
+    // The view is a join, so it carries `post_pt_position` beside `pre_pt_position`; a column read
+    // off the wrong end, or at the wrong resolution, puts the partner end microns from its T-bar.
+    const both = await source.fetchSynapsesBetween!({
+      datasetId: DATASET,
+      sourceIds: [SEED],
+      location: 'both',
+    })
+    // Every row, not a typical one: median 118 nm and largest 569 over 9,161 on the seed when written.
+    expectShortHops(both)
   }, 600_000)
 
   /*

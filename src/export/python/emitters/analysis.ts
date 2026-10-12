@@ -9,6 +9,7 @@ import { MAX_SERIES } from '../../../style/colors'
 import { clusterColor } from '../../../style/encoding'
 import { pyList, pyStr, pyValue } from '../py'
 import { meshCleanParamsFrom, skeletonCleanParamsFrom } from '../../../nodes/lib/cleanOps'
+import { skeletonSimplifyParamsFrom, thins } from '../../../nodes/lib/simplifyOps'
 import { NM_PER_UM } from '../../../data/units'
 import {
   distanceKindOf,
@@ -1494,6 +1495,21 @@ const CLEAN_UNITS_NOTE =
   'distances below are the card’s values times 1000. If your neurons are in other units ' +
   '(neuprintr and neuprint-python both return voxels), scale them to match.'
 
+/**
+ * The top of both skeleton cells' loop: a neuron's nodes as row numbers. Row numbers as node ids,
+ * which is what Coda's `parents` array already is — and what makes every fastcore call after it
+ * index straight back into `coords` and anything else read off `nodes`.
+ */
+const SKELETON_ROWS = [
+  `    nodes = _neuron.nodes.reset_index(drop=True)`,
+  `    ids = np.arange(len(nodes))`,
+  `    lookup = pd.Series(ids, index=nodes['node_id'])`,
+  `    parents = np.where(`,
+  `        nodes['parent_id'] >= 0, lookup.reindex(nodes['parent_id']).to_numpy(), -1`,
+  `    ).astype(np.int64)`,
+  `    coords = nodes[['x', 'y', 'z']].to_numpy(dtype=float)`,
+]
+
 registerEmitter('neuron.cleanSkeletons', (ctx) => {
   const src = ctx.wired('in')
   ctx.require('fastcore')
@@ -1513,18 +1529,7 @@ registerEmitter('neuron.cleanSkeletons', (ctx) => {
   const spacing = p.spacing * NM_PER_UM
   const factor = p.factor
 
-  const body: string[] = [
-    `    nodes = _neuron.nodes.reset_index(drop=True)`,
-    // Row numbers as node ids, which is what Coda's `parents` array already is — and what
-    // makes every fastcore call below index straight back into `coords` and `radii`.
-    `    ids = np.arange(len(nodes))`,
-    `    lookup = pd.Series(ids, index=nodes['node_id'])`,
-    `    parents = np.where(`,
-    `        nodes['parent_id'] >= 0, lookup.reindex(nodes['parent_id']).to_numpy(), -1`,
-    `    ).astype(np.int64)`,
-    `    coords = nodes[['x', 'y', 'z']].to_numpy(dtype=float)`,
-    `    radii = nodes['radius'].to_numpy(dtype=float)`,
-  ]
+  const body: string[] = [...SKELETON_ROWS, `    radii = nodes['radius'].to_numpy(dtype=float)`]
 
   if (heal) {
     body.push(
@@ -1574,6 +1579,77 @@ registerEmitter('neuron.cleanSkeletons', (ctx) => {
     `    })`,
     `    _cleaned.append(navis.Skeleton(_out, id=_neuron.id, units=_neuron.units))`,
     `${out} = navis.NeuronList(_cleaned)`,
+  ]
+})
+
+/**
+ * Simplify Skeletons, in fastcore for the reason both cleaning nodes are: `simplify_rdp` and
+ * `simplify_vw` have no navis wrapper, and `navis.prune_twigs` has neither of the two protections
+ * the canvas adds (`coda_prune_twigs` says which).
+ *
+ * Every array stays in the neuron's own **row numbers** from start to finish — fastcore takes
+ * arbitrary ids, and the thinning calls are handed the pruned rows as ids — so the output is
+ * `nodes.iloc[ids]` with every column the neuron had, and only `parent_id` rewritten.
+ */
+registerEmitter('neuron.simplifySkeletons', (ctx) => {
+  const src = ctx.wired('in')
+  ctx.require('fastcore')
+  ctx.require('numpy')
+  ctx.require('pandas')
+  ctx.require('navis')
+
+  const out = ctx.output('out')
+  const p = skeletonSimplifyParamsFrom(ctx.params)
+  const prune = p.prune * NM_PER_UM
+  const tolerance = p.tolerance * NM_PER_UM
+  const area = p.area * NM_PER_UM * NM_PER_UM
+
+  const body: string[] = [
+    ...SKELETON_ROWS,
+    // navis' soma, where Coda picks the widest soma-labelled node: the same node wherever a
+    // neuron has one soma, which is every source but a hand-edited SWC.
+    `    _soma = [] if _neuron.soma is None else np.atleast_1d(_neuron.soma)`,
+    `    soma = int(lookup.get(_soma[0], -1)) if len(_soma) else -1`,
+  ]
+
+  if (prune > 0) {
+    ctx.helper('coda_prune_twigs')
+    body.push(
+      `    ids, parents = coda_prune_twigs(parents, coords, ${prune}, soma=soma, repeat=${p.repeat ? 'True' : 'False'})`,
+    )
+  }
+  const call = thins(p)
+    ? {
+        none: undefined,
+        every: `downsample_skeleton(ids, parents, ${p.factor}, preserve=preserve)`,
+        rdp: `simplify_rdp(ids, parents, coords[ids], ${tolerance}, preserve=preserve)`,
+        vw: `simplify_vw(ids, parents, coords[ids], ${area}, preserve=preserve)`,
+      }[p.method]
+    : undefined
+  if (call) {
+    body.push(
+      // The soma survives the thinning too; roots, branch points and leaves always do.
+      `    preserve = [soma] if soma in ids else None`,
+      `    ids, parents, _, _ = fastcore.${call}`,
+    )
+  }
+
+  const note =
+    p.method === 'vw'
+      ? `${CLEAN_UNITS_NOTE} The smallest area is squared, so it is the card’s value times 1,000,000.`
+      : CLEAN_UNITS_NOTE
+  return [
+    ...ctx.note(note),
+    // The neuron count never changes, which keeps the list joinable to its metadata.
+    `_simplified = []`,
+    `for _neuron in navis.NeuronList(${src}):`,
+    ...body,
+    `    _out = nodes.iloc[ids].copy()`,
+    `    _out['parent_id'] = np.where(`,
+    `        parents >= 0, nodes['node_id'].to_numpy()[np.maximum(parents, 0)], -1`,
+    `    )`,
+    `    _simplified.append(navis.Skeleton(_out, id=_neuron.id, units=_neuron.units))`,
+    `${out} = navis.NeuronList(_simplified)`,
   ]
 })
 

@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { defaultParams, makeInferContext } from '../../core/node'
 import { requireNodeDef } from '../../core/registry'
-import { T, column, tableSchema } from '../../core/types'
+import { NEURONS_BOTH_AXES, T, column, tableSchema } from '../../core/types'
 import type { MeshesValue, SkeletonsValue } from '../../core/values'
 import { makeTable } from '../../core/values'
 import { chain } from '../lib/__fixtures__/chain'
@@ -246,9 +246,10 @@ describe('the node', () => {
     await expect(run({}, { query: empty })).rejects.toThrow(/No neurons on the Query input/)
   })
 
-  it('publishes a matrix before anything has run', () => {
+  it('publishes a matrix of neurons on both axes before anything has run', () => {
+    // Which axes are neurons is what an exporter reads to write Reduce Matrix's `neuronId`.
     const out = def.inferOutputs!(makeInferContext(def, {}, {}))
-    expect(out.matrix).toEqual(T.matrix())
+    expect(out.matrix).toEqual(T.matrix(NEURONS_BOTH_AXES))
   })
 })
 

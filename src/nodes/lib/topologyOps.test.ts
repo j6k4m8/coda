@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { SkeletonGeometry } from '../../core/values'
-import { splitName } from '../../core/values'
+import { SWC_SOMA, splitName } from '../../core/values'
 import {
   GRID_SPREAD,
   cellKey,
@@ -22,9 +22,11 @@ import {
   classifyNodes,
   compartmentStats,
   maxRootDistance,
+  rootDistances,
   morphometrics,
   morphometricsSchema,
   morphometricsTable,
+  nodeLocator,
   parentDistances,
   segmentStats,
   segregationIndex,
@@ -33,6 +35,7 @@ import {
   splitColumns,
   strahlerOrders,
 } from './topologyOps'
+import { ySkeleton } from './__fixtures__/ySkeleton'
 
 /**
  * A skeleton from a parent list, with **every edge exactly 1 µm**.
@@ -204,6 +207,25 @@ describe('maxRootDistance', () => {
      */
     const arms = skeletonOf([-1, 0, 1, 0, 3])
     expect(maxRootDistance(arms)).toBeCloseTo(2000, 6)
+  })
+
+  it('measures from a labelled soma the skeleton is not rooted at', () => {
+    // A 3 µm chain rooted at one end, its soma one node in: the far tip is 2 µm from the soma
+    // and the root 1 µm, against 3 µm from the root.
+    const chain = {
+      ...skeletonOf([-1, 0, 1, 2]),
+      compartments: new Uint8Array([0, SWC_SOMA, 0, 0]),
+    }
+    expect([...rootDistances(chain)]).toEqual([1000, 0, 1000, 2000])
+  })
+
+  it('measures the soma’s fragment from the soma and every other from its own root', () => {
+    // male-CNS 48122's shape: the soma in a small fragment, its arbour in a larger one beside it.
+    const pieces = {
+      ...skeletonOf([-1, 0, 1, 2, -1, 4]),
+      compartments: new Uint8Array([0, 0, 0, 0, 0, SWC_SOMA]),
+    }
+    expect([...rootDistances(pieces)]).toEqual([0, 1000, 2000, 3000, 1000, 0])
   })
 })
 
@@ -479,5 +501,84 @@ describe('the split columns', () => {
 
   it('names the codes, and leaves an unassigned node unnamed', () => {
     expect([0, 1, 2, 3, 9].map(splitName)).toEqual([null, 'dendrite', 'axon', 'linker', null])
+  })
+})
+
+describe('nodeLocator', () => {
+  it('answers no node past a radius, and the nearest within it', () => {
+    // The arbour tests' Y: nodes 1 µm apart along x, the nearest to (1100, 0, 0) being node 1.
+    const locate = nodeLocator(ySkeleton())
+    expect(locate(1100, 0, 0)).toBe(1)
+    expect(locate(1100, 0, 0, 200 ** 2)).toBe(1)
+    expect(locate(1100, 0, 0, 50 ** 2)).toBe(-1)
+    // Far off: with no radius the search still finds it; with one it gives up early.
+    expect(locate(50_000, 0, 0)).toBe(3)
+    expect(locate(50_000, 0, 0, 10_000 ** 2)).toBe(-1)
+  })
+
+  it('answers the grid’s node through either shortcut a radius allows', () => {
+    // The box rejection (a point outside the arbour by more than the radius) and the scan a wide
+    // radius falls back to, against the grid search they stand in for.
+    const locate = nodeLocator(ySkeleton())
+    for (const [x, y] of [
+      [1100, 0],
+      [2100, 1900],
+      [3400, 100],
+      [-200, 50],
+    ] as const) {
+      expect(locate(x, y, 0, 1e12)).toBe(locate(x, y, 0))
+    }
+    expect(locate(9000, 9000, 0, 1000 ** 2)).toBe(-1)
+  })
+
+  it('agrees with every node one by one on a skeleton the radius dwarfs', () => {
+    /*
+     * A random walk of 3,000 nodes 1 µm apart, asked with a 10 µm radius: dozens of rings, so the
+     * search stops at the rings a scan is cheaper than and has to know when that answer is the
+     * nearest. Points near the cable (the usual synapse) and far from it (the scan's case) alike.
+     */
+    let seed = 7
+    const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1
+    const n = 3000
+    const positions = new Float32Array(n * 3)
+    for (let i = 1; i < n; i++) {
+      for (let a = 0; a < 3; a++)
+        positions[i * 3 + a] = positions[(i - 1) * 3 + a]! + rand() * 600
+    }
+    const skeleton = skeletonOf(
+      Array.from({ length: n }, (_, i) => i - 1),
+      { positions: [...positions] },
+    )
+    const locate = nodeLocator(skeleton)
+    const maxSq = 10_000 ** 2
+    const brute = (x: number, y: number, z: number) => {
+      let best = -1
+      let bestSq = maxSq
+      for (let i = 0; i < n; i++) {
+        const d =
+          (positions[i * 3]! - x) ** 2 +
+          (positions[i * 3 + 1]! - y) ** 2 +
+          (positions[i * 3 + 2]! - z) ** 2
+        if (d <= bestSq) [best, bestSq] = [i, d]
+      }
+      return best
+    }
+    for (let q = 0; q < 400; q++) {
+      const at = Math.floor(((rand() + 1) / 2) * (n - 1))
+      const spread = q % 2 ? 300 : 6000
+      const x = positions[at * 3]! + rand() * spread
+      const y = positions[at * 3 + 1]! + rand() * spread
+      const z = positions[at * 3 + 2]! + rand() * spread
+      const want = brute(x, y, z)
+      const got = locate(x, y, z, maxSq)
+      // Ties may pick either node; the distance is what must agree.
+      const dist = (i: number) =>
+        i < 0
+          ? -1
+          : (positions[i * 3]! - x) ** 2 +
+            (positions[i * 3 + 1]! - y) ** 2 +
+            (positions[i * 3 + 2]! - z) ** 2
+      expect(dist(got), `query ${q}`).toBeCloseTo(dist(want), 0)
+    }
   })
 })

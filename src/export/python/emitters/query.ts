@@ -9,6 +9,7 @@
  */
 
 import { DATASET_FAMILIES } from '../../../nodes/lib/datasetFamilies'
+import { renameLines } from './connectivity'
 import { SYNAPSE_UNITS, confidenceIgnoredWarning } from '../../../data/synapseUnits'
 import { CUSTOM_SOURCE_ID } from '../../../data/custom/layout'
 import { minSynapseConfidence, synapseUnitFor } from '../../../nodes/lib/synapseParams'
@@ -573,7 +574,11 @@ registerEmitter('neuron.adjacency', (ctx) => {
   )
   const out = ctx.output('matrix')
   const links = ctx.output('links')
-  const byType = ctx.params.groupByType !== false
+  const byType = ctx.params.groupByType === true
+  // What a link is per: a type pair, or a neuron pair with each end's type riding along.
+  const linkKeys = byType
+    ? ['type_pre', 'type_post']
+    : ['bodyId_pre', 'type_pre', 'bodyId_post', 'type_post']
   // neuprint-python's own vocabulary, not Coda's: `connection_table_to_matrix` appends
   // `_pre`/`_post` to this itself, and the columns it is indexing are `fetch_adjacencies`'
   // output — which `merge_neuron_properties` has just written `bodyId_pre`/`bodyId_post` into.
@@ -602,12 +607,21 @@ registerEmitter('neuron.adjacency', (ctx) => {
      * (pre, post, ROI), so the sum is across regions, which is exactly what
      * `connection_table_to_matrix` collapses into a cell.
      */
+    // Connectivity's columns (`MATRIX_LINKS_SCHEMA`). Per neuron the ids are the body ids; grouped
+    // by type a line is a type, so the ids are empty — as on the canvas.
     `${links} = (`,
     `    _conn`,
-    `    .groupby([${pyStr(`${group}_pre`)}, ${pyStr(`${group}_post`)}], as_index=False)['weight']`,
+    `    .groupby([${linkKeys.map(pyStr).join(', ')}], as_index=False, dropna=False)['weight']`,
     `    .sum()`,
-    `    .rename(columns={${pyStr(`${group}_pre`)}: 'source', ${pyStr(`${group}_post`)}: 'target'})`,
+    // Connectivity's rename; a grouped frame has no body ids, and pandas skips absent keys.
+    `    .rename(columns={`,
+    ...renameLines('        '),
+    `    })`,
     `)`,
+    ...(byType
+      ? [`${links}.insert(0, 'preId', None)`, `${links}.insert(2, 'postId', None)`]
+      : []),
+    codaIds(ctx, links, 'preId', 'postId'),
   ]
 })
 

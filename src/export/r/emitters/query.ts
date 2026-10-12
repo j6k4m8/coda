@@ -462,11 +462,18 @@ registerEmitter('neuron.adjacency', (ctx) => {
     // The long half, melted off the matrix and stripped of its zeros — `matrixToLinks`' rule,
     // for its reason: a matrix cell is 0 where nothing was found, and keeping those would make
     // a complete graph of zero-weight links. `as.table` names the axes Var1/Var2/Freq.
+    // Connectivity's columns (`MATRIX_LINKS_SCHEMA`): the matrix here is per body, so its axis
+    // names are the ids, and the types come from the neurons' metadata.
     `${links} <- as.data.frame(as.table(as.matrix(${out})), stringsAsFactors = FALSE)`,
-    `names(${links}) <- c("source", "target", "weight")`,
+    `names(${links}) <- c("preId", "postId", "weight")`,
     `${links} <- ${links}[${links}$weight != 0, ]`,
+    `.meta <- neuprint_get_meta(unique(c(${links}$preId, ${links}$postId)), conn = ${conn})`,
+    `${links}$preType <- .meta$type[match(${links}$preId, as.character(.meta$bodyid))]`,
+    `${links}$postType <- .meta$type[match(${links}$postId, as.character(.meta$bodyid))]`,
+    `${links} <- ${links}[c("preId", "preType", "postId", "postType", "weight")]`,
+    codaIds(ctx, links, 'preId', 'postId'),
   ]
-  if (ctx.params.groupByType !== false) {
+  if (ctx.params.groupByType === true) {
     lines.push(
       ...ctx.note(
         'Coda groups this matrix by cell type (`Group by type`). neuprint_get_adjacency_matrix ' +

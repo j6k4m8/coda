@@ -112,6 +112,17 @@ describe('the op', () => {
     expect(s.radius[1]).toBeCloseTo(0.095)
   })
 
+  it('measures the root distance from a soma the skeleton is not rooted at', async () => {
+    // The soma one node up the trunk, at 1 µm: the first piece sits below it, on cable that runs
+    // *towards* the delivered root, so its distance falls with the child end rather than rising.
+    const s = await sampleSkeleton(
+      yShape({ compartments: new Uint8Array([0, 1, 2, 3, 3, 4]) }),
+      'resample',
+      1000,
+    )
+    expect(s.rootDistance.slice(0, 3)).toEqual([0.5, 0.5, 1.5])
+  })
+
   it('takes the compartment and Strahler order of the edge’s child node', async () => {
     const s = await sampleSkeleton(yShape(), 'resample', 1000)
     expect(s.compartment.slice(0, 3)).toEqual(['axon', 'axon', 'axon'])

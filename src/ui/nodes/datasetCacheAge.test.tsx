@@ -149,3 +149,29 @@ describe('a download somebody else started', () => {
     expect(await screen.findByText(/cached 0s ago/)).toBeTruthy()
   })
 })
+
+describe('the right-click', () => {
+  /*
+   * Every other card's age opens Cache lifetime on a right-click. This one cannot offer a
+   * lifetime — the copy is shared by every card on the dataset — so the gesture says so instead
+   * of falling through, and still offers the one thing the label does.
+   */
+  it('says why there is no lifetime here, and fetches again from the menu', async () => {
+    await cachedDaysAgo(neuronIndexKey(source.id, DATASET), 3)
+    const fetching = vi.spyOn(source, 'neuronIndex')
+    const onCard = vi.fn()
+    render(
+      <div onContextMenu={onCard}>
+        <DatasetCacheAge sourceId={source.id} datasetId={DATASET} annotations={undefined} />
+      </div>,
+    )
+    fireEvent.contextMenu(await screen.findByText(/cached 3d ago/))
+    expect(onCard).not.toHaveBeenCalled()
+    expect(screen.getByText(/no per-node lifetime/)).toBeTruthy()
+    expect(screen.queryByRole('menuitemradio')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch Again Now' }))
+    await waitFor(() => expect(fetching).toHaveBeenCalled())
+    expect(fetching.mock.calls[0]?.[0]?.refresh).toBe(true)
+  })
+})

@@ -148,6 +148,21 @@ describe('SplitEditor', () => {
     expect(screen.getByText(/has no split/)).toBeTruthy()
   })
 
+  it('names the neuron by its type, its id muted beside it', () => {
+    renderEditor()
+    expect(document.querySelector('.topo__name')?.textContent).toBe('LC4')
+    expect(document.querySelector('.topo__id')?.textContent).toBe('1001')
+  })
+
+  it('opens its menu in the layer above the viewer overlay', async () => {
+    // Portalled to the body, so it is not inside the overlay's stacking context: without the
+    // class it sat at 45, under the overlay's 60, and opened unseen behind the expanded card.
+    renderEditor()
+    await settle()
+    fireEvent.click(screen.getByLabelText('LC4 split').parentElement!, onBranch(0.5))
+    expect(screen.getByRole('menu').classList.contains('context-menu--portal')).toBe(true)
+  })
+
   it('writes the correction a click on a branch stands for, with the root it was made against', async () => {
     const onParamChange = renderEditor([theirs])
     await settle()

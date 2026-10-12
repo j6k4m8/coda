@@ -47,7 +47,7 @@ registerNode({
   label: 'Reduce Matrix',
   category: 'transform',
   description:
-    'Summarise each row or each column of a matrix as one table row. The result is `label` plus one column per statistic you tick, and `Prefix` renames them all, so `zap` gives `zap_mean`.',
+    'Summarise each row or each column of a matrix as one table row. The result is `label`, the line’s `neuronId` where it is one, and one column per statistic you tick; `Prefix` renames those, so `zap` gives `zap_mean`.',
   guide:
     'Summarises each row (or each column) of a matrix with the statistics you tick, such as ' +
     'mean, max or sd, and returns them as a table keyed by label. Use it to get from a trace or ' +

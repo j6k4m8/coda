@@ -30,6 +30,7 @@ import {
   makeMatrix,
   skeletonPointCount,
   tableFromRows,
+  withLines,
 } from '../../core/values'
 import type { Value } from '../../core/values'
 import { warnSideCount } from './limitParams'
@@ -262,13 +263,18 @@ export function nblastMatrix(
   result: NblastResult,
   rowLabels: string[],
   colLabels: string[],
+  /** What each axis' lines are, which `Label by` may have replaced in the labels. */
+  lines: NonNullable<MatrixValue['lines']>,
 ): MatrixValue {
   // Through `makeMatrix` rather than a literal: it is the one place that checks the labels
   // against the values, and a label array that has drifted from the result would otherwise
   // reach the Heatmap silently. Similarity whether or not it was normalised — un-normalised
   // scores are unbounded but they still rise with likeness, and a clustering node has to know
   // to invert them.
-  return makeMatrix(rowLabels, colLabels, result.scores, 'NBLAST score', 'similarity')
+  return withLines(
+    makeMatrix(rowLabels, colLabels, result.scores, 'NBLAST score', 'similarity'),
+    lines,
+  )
 }
 
 /**

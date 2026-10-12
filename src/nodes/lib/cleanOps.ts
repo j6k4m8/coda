@@ -50,6 +50,7 @@ import type {
 } from '../../pyodide/skeletons'
 import { NM_PER_UM } from '../../data/units'
 import { packPositions, packSkeletons } from './skeletonPacking'
+import { nodeLocator } from './topologyOps'
 import { geometryPointCount } from './transformOps'
 
 /**
@@ -68,6 +69,37 @@ export function checkCleanUnits(value: { units?: GeometryUnits }, usesDistance: 
     `These coordinates are in ${value.units}, so a distance in micrometres cannot be ` +
       `applied to them. Leave the distance settings at 0, or fetch from a dataset whose ` +
       `Meta publishes a voxel size.`,
+  )
+}
+
+/**
+ * Refuse a Python result whose offsets describe a different number of items than went in.
+ *
+ * Every consumer indexes the attribute table by item position, so a set that came back with a
+ * different number of neurons is a set where the labels have moved — and it draws. One check for
+ * every geometry pipeline that crosses the bridge and rebuilds its offsets.
+ */
+export function checkItemCount(
+  node: string,
+  offsets: Int32Array,
+  count: number,
+  noun: string,
+): void {
+  if (offsets.length === count + 1) return
+  throw new Error(
+    `${node} returned ${offsets.length - 1} ${noun} for ${count} — the attribute table and the ` +
+      'geometry would no longer line up.',
+  )
+}
+
+/**
+ * The edit-time sentence for a micrometre control holding a number that is nearly always a
+ * nanometre one. Never a refusal: a strange value is not an impossible one.
+ */
+export function micrometreMixup(label: string, value: number, unit = 'µm'): string {
+  return (
+    `\`${label}\` is ${value} ${unit}. This setting is in micrometres; check you did not ` +
+    'enter nanometres.'
   )
 }
 
@@ -156,7 +188,7 @@ export function cleanRequestFrom(
 ): CleanSkeletonsRequest {
   // `parents`, `offsets` and `points` are `skeletonPacking.ts`' — that layout and both of its
   // rules are shared with every other Pyodide skeleton call. What is local here is `radii`.
-  const { parents, offsets, total } = packSkeletons(skeletons)
+  const { parents, offsets, somas, total } = packSkeletons(skeletons)
   const points = packPositions(skeletons, offsets)
   const radii = new Float32Array(total)
   // Zeros for a neuron that carried no labels; `skeletonsFromResult` drops them again for it.
@@ -176,6 +208,7 @@ export function cleanRequestFrom(
     radii,
     compartments,
     offsets,
+    somas,
     heal: params.heal,
     healMaxDist: params.healMaxDist * NM_PER_UM,
     smooth: params.smooth * NM_PER_UM,
@@ -186,7 +219,7 @@ export function cleanRequestFrom(
 }
 
 /** A neuron's labels as a spread: none for one that arrived unlabelled, `labelledOrNone`'s rule. */
-function labelled(codes: Uint8Array | undefined): { compartments?: Uint8Array } {
+export function labelled(codes: Uint8Array | undefined): { compartments?: Uint8Array } {
   const kept = codes && labelledOrNone(codes)
   return kept ? { compartments: kept } : {}
 }
@@ -206,26 +239,23 @@ export function skeletonsFromResult(
   result: CleanSkeletonsResult,
 ): SkeletonsValue {
   const count = original.items.length
-  if (result.offsets.length !== count + 1) {
-    // Every consumer indexes the attribute table by item position, so a set that came back
-    // with a different number of neurons is a set where the labels have moved.
-    throw new Error(
-      `Clean Skeletons returned ${result.offsets.length - 1} neurons for ${count} — the ` +
-        'attribute table and the geometry would no longer line up.',
-    )
-  }
+  checkItemCount('Clean Skeletons', result.offsets, count, 'neurons')
 
   const items: SkeletonGeometry[] = original.items.map((item, n) => {
     const from = result.offsets[n]!
     const to = result.offsets[n + 1]!
-    return {
+    const cleaned: SkeletonGeometry = {
       // The id is the draw and export key and this neuron is still that neuron — invariant 8's
       // line, and the same call `mirrorGeometry` makes.
       id: item.id,
       positions: result.points.slice(from * 3, to * 3),
       radii: result.radii.slice(from, to),
       parents: result.parents.slice(from, to),
+    }
+    return {
+      ...cleaned,
       ...labelled(item.compartments && result.compartments.slice(from, to)),
+      ...snappedTags(item, cleaned),
       /*
        * `split` and `nodeValues` deliberately not carried. They label the nodes of the tree they
        * were computed on, and cleaning renumbers them — where the source's `compartments` above
@@ -236,6 +266,50 @@ export function skeletonsFromResult(
   })
 
   return { ...original, items, bounds: boundsOf(items.map((item) => item.positions)) }
+}
+
+/**
+ * The item's tags on the cleaned nodes: each tagged node's position snapped to the nearest new
+ * node. A tag is a point on the cable rather than a node id, so it survives a renumbering the way
+ * a hand correction does — never dropped, and never left naming an index that now means another
+ * node. Two tagged nodes landing on one new node are one. Through `nodeLocator`'s grid, built
+ * once per neuron, rather than a scan per tagged node: CATMAID's `ends` sits on every finished
+ * leaf, so a large neuron carries thousands. Asked with an unbounded radius, which is its exact
+ * path — the rings a grid pays for, then a scan for a node further out than those.
+ *
+ * `keep` is for a transform whose new nodes are a subset of the old (Simplify Skeletons): new
+ * row per kept old row. A tag on a survivor then stays on it with no search at all, and the grid
+ * is built only if some tag sat on a removed node — which after thinning, which keeps every leaf,
+ * is usually none.
+ */
+export function snappedTags(
+  item: SkeletonGeometry,
+  cleaned: SkeletonGeometry,
+  keep?: Int32Array,
+): { tags?: Record<string, Int32Array> } {
+  if (!item.tags || cleaned.parents.length === 0) return {}
+  let row: Int32Array | undefined
+  if (keep) {
+    row = new Int32Array(item.parents.length).fill(-1)
+    for (let i = 0; i < keep.length; i++) row[keep[i]!] = i
+  }
+  let locate: ReturnType<typeof nodeLocator> | undefined
+  const tags: Record<string, Int32Array> = {}
+  for (const [name, nodes] of Object.entries(item.tags)) {
+    const snapped = new Set<number>()
+    for (const node of nodes) {
+      const kept = row?.[node] ?? -1
+      if (kept >= 0) {
+        snapped.add(kept)
+        continue
+      }
+      locate ??= nodeLocator(cleaned)
+      const at = item.positions.subarray(node * 3, node * 3 + 3)
+      snapped.add(locate(at[0]!, at[1]!, at[2]!, Infinity))
+    }
+    tags[name] = Int32Array.from(snapped)
+  }
+  return { tags }
 }
 
 /**
@@ -410,12 +484,7 @@ export function meshesFromResult(
   keepDetail: boolean,
 ): MeshesValue {
   const count = original.items.length
-  if (result.vertexOffsets.length !== count + 1) {
-    throw new Error(
-      `Clean Meshes returned ${result.vertexOffsets.length - 1} meshes for ${count} — the ` +
-        'attribute table and the geometry would no longer line up.',
-    )
-  }
+  checkItemCount('Clean Meshes', result.vertexOffsets, count, 'meshes')
 
   const items: MeshGeometry[] = original.items.map((item, n) => ({
     id: item.id,

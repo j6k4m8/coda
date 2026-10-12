@@ -60,6 +60,7 @@ import type { ColumnData, MeshesValue, PointsValue } from '../../core/values'
 import { makeTable } from '../../core/values'
 import type { TableSchema } from '../../core/types'
 import { column, findColumn, tableSchema } from '../../core/types'
+import { SEARCHES_PER_SECOND } from './geometryDistance'
 import { selectPoints } from './iterables'
 import { foldColumns } from './tableOps'
 import { frameClash, frameClashMessage } from './transformOps'
@@ -157,9 +158,10 @@ export function columnClash(
  * `pnpm probe:points-in-volumes`, and the shape of the measurement is the reason the threshold
  * is where it is. **A ray barely moves with the surface** — 1.5 µs at 20k triangles a volume
  * against 1.9 µs at a million, a tree descent being logarithmic — so the cost scales with the
- * cloud and not with the meshes, and the threshold can be a ray count at all. Seven and a half
- * million of them is about **fourteen seconds**, which is the first point at which somebody
- * waits and has no fetch to blame it on; an ordinary hundred-thousand-synapse cloud against a
+ * cloud and not with the meshes, and the threshold can be a ray count at all. Twenty million of
+ * them is about **forty seconds** at the rate below. It was seven and a half million (fourteen
+ * seconds) until 2026-10-11, raised as too eager once a split by ROI started counting every
+ * skeleton node; an ordinary hundred-thousand-synapse cloud against a
  * primary set is two or three hundred thousand rays, well under half a second, and says nothing.
  *
  * **These numbers were wrong once and the error is the instructive part.** The probe sampled
@@ -172,7 +174,7 @@ export function columnClash(
  * What is deliberately **not** thresholded is the trees: 192 ms per million triangles, paid once,
  * and held weakly against the mesh items afterwards, so a second Run pays none of it.
  */
-export const RAY_WARN = 7_500_000
+export const RAY_WARN = 20_000_000
 
 /**
  * The rate the threshold above and the sentence below are both derived from.
@@ -236,8 +238,8 @@ export interface LabelOptions {
  * **Sliced rather than run to completion**, which is not optional here: `evaluate` runs on the
  * main thread, so a walk that never awaits reports progress the browser never paints and cannot
  * observe the abort it checks for — the click that would set the signal cannot be dispatched
- * while the loop holds the event loop. At this node's own warning threshold that is thirteen
- * seconds of frozen tab with a dead bar and a Cancel that does nothing. `core/slice.ts` owns the
+ * while the loop holds the event loop. At this node's own warning threshold (`RAY_WARN`) that
+ * is the better part of a minute of frozen tab with a dead bar and a Cancel that does nothing. `core/slice.ts` owns the
  * loop; what is left here is the body.
  */
 export async function labelPointsByVolume(
@@ -299,36 +301,70 @@ export function splitOnLabels(
 /**
  * The rays this run will cost, counted before any of them is cast.
  *
- * One box sweep over the cloud — three comparisons per volume per point — which is cheap enough
- * to spend on knowing, and is the only way the warning can arrive before the wait rather than
- * after it. `networkMetrics`' `TRIANGLE_WORK_WARN` is the same shape and states the argument.
+ * One box sweep over the positions — a cloud's, or a skeleton's nodes — three comparisons per
+ * volume per point, which is cheap enough to spend on knowing, and is the only way the warning
+ * can arrive before the wait rather than after it. `networkMetrics`' `TRIANGLE_WORK_WARN` is the same shape and states the argument.
  */
 export function countRays(
-  points: PointsValue,
+  positions: Float32Array,
   candidates: (x: number, y: number, z: number) => number,
 ): number {
   let rays = 0
-  for (let i = 0; i < points.attributes.length; i++) {
-    rays += candidates(
-      points.positions[i * 3]!,
-      points.positions[i * 3 + 1]!,
-      points.positions[i * 3 + 2]!,
-    )
+  for (let i = 0; i < positions.length; i += 3) {
+    rays += candidates(positions[i]!, positions[i + 1]!, positions[i + 2]!)
   }
   return rays
 }
 
-export function warnRayCount(ctx: Warner, rays: number, volumes: number): void {
-  if (rays <= RAY_WARN) return
+/**
+ * Rays plus surface searches — a split by ROI's `Margin` — as the rays that take as long, so
+ * `RAY_WARN` is still one wait. A search is priced at Distance between's measured `hasWithin`
+ * rate, taken on neuron surfaces; a region mesh is usually coarser, so this errs long, the side a
+ * warning should err on.
+ */
+function rayWork({ rays, searches = 0 }: RayCount): number {
+  return rays + searches * (RAYS_PER_SECOND / SEARCHES_PER_SECOND.meshes.bounded)
+}
+
+/** What a run against volumes casts: rays, and with a margin, surface searches. */
+export interface RayCount {
+  readonly rays: number
+  readonly searches?: number
+}
+
+/**
+ * The work counted and warned about before anything is cast — or, where an exact upper bound
+ * cannot reach `RAY_WARN`, the bound alone: it costs a multiply where the count is a box sweep
+ * over every point, and an ordinary run is below it (a hundred thousand synapses against a
+ * primary set is 6.3 M). Returns what it used, so a cached answer can replay the warning.
+ */
+export function warnRayWork(
+  ctx: Warner,
+  bound: RayCount,
+  count: () => RayCount,
+  volumes: number,
+): RayCount {
+  if (rayWork(bound) <= RAY_WARN) return bound
+  const counted = count()
+  warnRayCount(ctx, counted, volumes)
+  return counted
+}
+
+/** The warning for work already counted — `warnRayWork`'s, and a cached answer's replay. */
+export function warnRayCount(ctx: Warner, counted: RayCount, volumes: number): void {
+  const work = rayWork(counted)
+  if (work <= RAY_WARN) return
+  const searches = (counted.searches ?? 0) > 0
   warnOverThreshold(ctx, {
-    count: rays,
+    count: Math.round(work),
     threshold: RAY_WARN,
-    unit: 'ray casts',
+    unit: searches ? 'ray casts or the equivalent in margin searches' : 'ray casts',
     control: 'the usual amount of work for this node',
     cost:
-      `That is ${describeDuration(rays / RAYS_PER_SECOND)}, single-threaded, against the ` +
+      `That is ${describeDuration(work / RAYS_PER_SECOND)}, single-threaded, against the ` +
       `${volumes.toLocaleString()} volumes whose bounding box contains a point. ` +
-      `Wiring fewer volumes into \`Volumes\` helps most.`,
+      `Wiring fewer volumes into \`Volumes\` helps most` +
+      (searches ? '; a smaller `Margin` helps too.' : '.'),
   })
 }
 

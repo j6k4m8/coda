@@ -17,7 +17,7 @@
 
 import type { Slicer } from '../../core/slice'
 import { sliced } from '../../core/slice'
-import type { MeshesValue, SkeletonsValue } from '../../core/values'
+import type { MeshGeometry, SkeletonsValue } from '../../core/values'
 import type { DistanceCollection, TargetIndex } from './geometryDistance'
 import { buildKdTree } from './kdTree'
 import { buildMeshTrees } from './meshTrees'
@@ -35,7 +35,9 @@ export async function buildTargetIndexes(
   value: DistanceCollection,
   hooks: Slicer = {},
 ): Promise<TargetIndex[]> {
-  return value.kind === 'meshes' ? meshIndexes(value, hooks) : skeletonIndexes(value, hooks)
+  return value.kind === 'meshes'
+    ? meshIndexes(value.items, hooks)
+    : skeletonIndexes(value, hooks)
 }
 
 async function skeletonIndexes(value: SkeletonsValue, hooks: Slicer): Promise<TargetIndex[]> {
@@ -85,8 +87,15 @@ export function treeFor(item: { positions: Float32Array; parents: Int32Array }):
  */
 const BOUND_SLACK = (dist: number): number => dist * (1 + 1e-9) + 1e-6
 
-async function meshIndexes(value: MeshesValue, hooks: Slicer): Promise<TargetIndex[]> {
-  const { three, trees: bvhs } = await buildMeshTrees(value.items, hooks)
+/**
+ * The mesh arm alone, over items rather than a value — what a split by ROI with a margin asks of
+ * its volumes, on the same cached trees the inside test casts against.
+ */
+export async function meshIndexes(
+  items: readonly MeshGeometry[],
+  hooks: Slicer = {},
+): Promise<TargetIndex[]> {
+  const { three, trees: bvhs } = await buildMeshTrees(items, hooks)
   const { Vector3 } = three
   /*
    * One point and one hit record for the whole run, reused by every query. `closestPointToPoint`
@@ -111,8 +120,8 @@ async function meshIndexes(value: MeshesValue, hooks: Slicer): Promise<TargetInd
    *
    * It is *not* to avoid a leak, which is what this comment claimed for a round. V8
    * context-allocates only what an inner function reads, and these two read `probe`, `hit` and
-   * their own `bvh` — `value` and `bvhs` are touched in the outer body alone, so nothing holds
-   * the `MeshesValue`. Worth saying because the reverse mistake is the expensive one: a closure
+   * their own `bvh` — `items` and `bvhs` are touched in the outer body alone, so nothing holds
+   * the items. Worth saying because the reverse mistake is the expensive one: a closure
    * that *did* read the enclosing array would pin every other mesh's tree, which is the failure
    * `kdTree.ts`' `Build` record records.
    */

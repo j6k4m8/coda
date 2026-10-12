@@ -28,8 +28,9 @@
  */
 
 import { registerNode } from '../../core/registry'
-import { NUMERIC_DTYPES, T } from '../../core/types'
-import { isTableValue } from '../../core/values'
+import { NEURONS_BOTH_AXES, NUMERIC_DTYPES, T } from '../../core/types'
+import { isTableValue, neuronLines, withLines } from '../../core/values'
+import { ID_COLUMN_NAME } from '../../core/ids'
 import {
   SIMILARITY_LAYOUT_OPTIONS,
   SIMILARITY_METRIC_OPTIONS,
@@ -140,7 +141,9 @@ registerNode({
     },
   ],
 
-  inferOutputs: () => ({ matrix: T.matrix() }),
+  inferOutputs: (ctx) => ({
+    matrix: T.matrix(observesNeurons(ctx) ? NEURONS_BOTH_AXES : undefined),
+  }),
 
   validate: (ctx) => {
     if (isLongLayout(ctx.params)) {
@@ -191,6 +194,23 @@ registerNode({
           `${features.labels.length}. Check that \`Observations\` is the column naming the neurons.`,
       )
     }
-    return { matrix: similarityMatrix(features, metric, output, ctx) }
+    const matrix = similarityMatrix(features, metric, output, ctx)
+    if (!observesNeurons(ctx)) return { matrix }
+    const lines = neuronLines(features.labels)
+    return { matrix: withLines(matrix, { rows: lines, cols: lines }) }
   },
 })
+
+/**
+ * Whether the observations are neurons: the column naming them is `neuronId`. One answer for the
+ * type the exporters read and the lines the canvas records. Not `isIdentifierColumn`, which says a
+ * number is an identifier to print exactly — `roiId` and `connectorId` are ids, and not neurons, and
+ * a `neuronId` column claiming them would act on that claim downstream (invariant 8).
+ */
+function observesNeurons(ctx: {
+  params: Readonly<Record<string, unknown>>
+  column(id: string): string | undefined
+}): boolean {
+  const column = isLongLayout(ctx.params) ? ctx.column('observations') : ctx.column('idColumn')
+  return column === ID_COLUMN_NAME
+}

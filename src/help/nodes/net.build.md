@@ -15,7 +15,7 @@ build -> net
 net.build: source, target, weight, directed, aggregate
 ```
 
-Pick the two id columns as `Source` and `Target`, and the column holding the connection strength (e.g. `weight` on a connectivity table) as `Weight`. If you leave `Weight` empty, each link is weighted by the number of rows that connect the pair.
+`Source`, `Target` and `Weight` start on `preId`, `postId` and `weight`, the columns of Connectivity, Adjacency's `Links` and Synapses to Edges, so those need no picking. For any other table, pick the two id columns and the column holding the connection strength. If you leave `Weight` empty, each link is weighted by the number of rows that connect the pair.
 
 The columns you pick are renamed on the way out: links carry `source`, `target`, `weight` and `edges` (the number of rows behind each link), and nodes carry `id`, `degreeIn`, `degreeOut`, `weightIn` and `weightOut`. Those are the names downstream column pickers will show you.
 

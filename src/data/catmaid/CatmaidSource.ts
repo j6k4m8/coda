@@ -26,7 +26,7 @@ import { ID_COLUMN_NAME, idText, numericIds } from '../../core/ids'
 import type {
   CellValue,
   GeometryUnits,
-  MatrixValue,
+  AdjacencyMatrix,
   MeshesValue,
   MeshGeometry,
   PointsValue,
@@ -36,9 +36,9 @@ import type {
   TableValue,
 } from '../../core/values'
 import {
+  SWC_SOMA,
   boundsOf,
   cableLength,
-  makeMatrix,
   makeTable,
   selectRows,
   tableFromRows,
@@ -70,9 +70,12 @@ import type {
   SynapseRequest,
   SynapsesBetweenRequest,
 } from '../source'
+import type { Edge } from '../connectivity'
+import { matrixFromEdges } from '../connectivity'
 import {
   ROI_MESH_SCHEMA,
   SYNAPSES_BETWEEN_SCHEMA,
+  drawnEnd,
   asksForNoSynapses,
   reportSourceLearned,
   requireSkeletonRoute,
@@ -216,7 +219,48 @@ function decodeCompactSkeleton(id: string, skeleton: CompactSkeleton): SkeletonG
     const parent = node[1]
     parents[i] = parent === null ? -1 : (position.get(parent) ?? -1)
   })
-  return { id, positions, radii, parents }
+  const tags = decodeTags(skeleton[2], position)
+  /*
+   * CATMAID's soma is a tag rather than a node type — `soma`, by the community's convention — so it
+   * becomes the source's own soma label, as neuPrint's `somaLocation` does (`withSomaAt`): every
+   * soma reader (the root a dendrogram, a split and Topology measure from) then finds it.
+   */
+  const somata = tags?.[SOMA_TAG]
+  let compartments: Uint8Array | undefined
+  if (somata) {
+    compartments = new Uint8Array(nodes.length)
+    for (const node of somata) compartments[node] = SWC_SOMA
+  }
+  return {
+    id,
+    positions,
+    radii,
+    parents,
+    ...(compartments ? { compartments } : {}),
+    ...(tags ? { tags } : {}),
+  }
+}
+
+/** The tag CATMAID tracers put on the soma. */
+const SOMA_TAG = 'soma'
+
+/**
+ * The response's node tags — tag name to node ids — as node indices. A node id the skeleton does
+ * not hold is dropped rather than kept as an index into nothing; a tag left with no node goes too.
+ */
+function decodeTags(
+  raw: CompactSkeleton[2] | undefined,
+  position: ReadonlyMap<number, number>,
+): Record<string, Int32Array> | undefined {
+  const tags: Record<string, Int32Array> = {}
+  for (const [name, ids] of Object.entries(raw ?? {})) {
+    const nodes = ids.flatMap((nodeId) => {
+      const at = position.get(nodeId)
+      return at === undefined ? [] : [at]
+    })
+    if (nodes.length > 0) tags[name] = Int32Array.from(nodes)
+  }
+  return Object.keys(tags).length > 0 ? tags : undefined
 }
 
 const EMPTY_LABELS: CatmaidLabels = {
@@ -591,7 +635,7 @@ export class CatmaidSource implements DataSource {
     return tableFromRows(this.schemas.connectivity, rows)
   }
 
-  async fetchAdjacency(req: AdjacencyRequest): Promise<MatrixValue> {
+  async fetchAdjacency(req: AdjacencyRequest): Promise<AdjacencyMatrix> {
     const projectId = this.projectId(req.datasetId)
     const options = req.signal ? { signal: req.signal } : {}
     const rows = numericIds(req.sourceIds)
@@ -599,17 +643,20 @@ export class CatmaidSource implements DataSource {
     const matrix = await connectivityMatrix(this.server, projectId, rows, columns, options)
     const labels = await this.labelIndex(req.datasetId, options)
 
-    const label = (id: number): string =>
-      req.groupByType ? (labels.labels.get(id)?.type ?? String(id)) : String(id)
-
-    const values = new Float64Array(rows.length * columns.length)
-    rows.forEach((source, r) => {
-      const line = matrix[String(source)] ?? {}
-      columns.forEach((target, c) => {
-        values[r * columns.length + c] = line[String(target)] ?? 0
-      })
-    })
-    return makeMatrix(rows.map(label), columns.map(label), values, 'synapses', 'count')
+    // The shared fold, so grouping by type sums a type's neurons as every other source does —
+    // this one wrote a row per neuron under its type's name once, which repeated the label.
+    const edges: Edge[] = []
+    for (const [pre, targets] of Object.entries(matrix)) {
+      for (const [post, weight] of Object.entries(targets ?? {})) {
+        if (weight) edges.push({ pre, post, weight })
+      }
+    }
+    const types = new Map<string, string>()
+    for (const id of [...rows, ...columns]) {
+      const type = labels.labels.get(id)?.type
+      if (type) types.set(String(id), type)
+    }
+    return matrixFromEdges(edges, rows.map(String), columns.map(String), types, req.groupByType)
   }
 
   // -------------------------------------------------------------------------
@@ -896,6 +943,7 @@ export class CatmaidSource implements DataSource {
      * connector of a traced neuron, and a row object per synapse handed to `tableFromRows` is
      * that function's documented not-a-hot-path.
      */
+    const drawn = drawnEnd(req.location)
     const positions: number[] = []
     const pres: number[] = []
     const posts: number[] = []
@@ -947,14 +995,7 @@ export class CatmaidSource implements DataSource {
         for (const pre of outgoing.links) {
           if (min > 0 && pre[5] < min) continue
           for (const post of received.get(pre[1]) ?? []) {
-            add(
-              pre[0],
-              post[0],
-              req.location === 'post' ? post[5] : pre[5],
-              pre[2],
-              pre[3],
-              pre[4],
-            )
+            add(pre[0], post[0], drawn === 'post' ? post[5] : pre[5], pre[2], pre[3], pre[4])
           }
         }
       } else {
@@ -1002,7 +1043,7 @@ export class CatmaidSource implements DataSource {
           }
           for (const pre of preLinks) {
             for (const post of postLinks) {
-              add(pre[2], post[2], req.location === 'post' ? post[4] : pre[4], x, y, z)
+              add(pre[2], post[2], drawn === 'post' ? post[4] : pre[4], x, y, z)
             }
           }
         }
@@ -1015,12 +1056,14 @@ export class CatmaidSource implements DataSource {
     return {
       kind: 'points',
       positions: buffer,
+      // One connector is both ends here, so `'both'` gets no partner columns: their absence is
+      // how a caller tells (`SynapseDraw`).
       attributes: makeTable(SYNAPSES_BETWEEN_SCHEMA, {
         [ID_COLUMN_NAME]: pres.map((id) => idText(id)),
         type: pres.map(typeOf),
         partnerId: posts.map((id) => idText(id)),
         partnerType: posts.map(typeOf),
-        polarity: new Array<string>(pres.length).fill(req.location),
+        polarity: new Array<string>(pres.length).fill(drawn),
         confidence: confidences,
       }),
       bounds: boundsOf([buffer]),
